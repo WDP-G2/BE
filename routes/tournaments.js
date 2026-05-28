@@ -1,10 +1,106 @@
 var express = require("express");
 var router = express.Router();
 var mongoose = require("mongoose");
+var crypto = require("crypto");
+var multer = require("multer");
 var User = require("../models/user");
 var Horse = require("../models/horse");
 var Tournament = require("../models/tournament");
 var { authenticate, requireRole } = require("../middleware/auth");
+
+var CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || "";
+var CLOUDINARY_API_KEY = process.env.CLOUDINARY_API_KEY || "";
+var CLOUDINARY_API_SECRET = process.env.CLOUDINARY_API_SECRET || "";
+
+function requireCloudinaryConfig() {
+  if (!CLOUDINARY_CLOUD_NAME || !CLOUDINARY_API_KEY || !CLOUDINARY_API_SECRET) {
+    throw new Error("Cloudinary is not configured");
+  }
+}
+
+var storage = multer.memoryStorage();
+
+function fileFilter(req, file, cb) {
+  var allowed = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+  if (allowed.indexOf(file.mimetype) === -1) {
+    return cb(new Error("Only image files are allowed"));
+  }
+  cb(null, true);
+}
+
+var upload = multer({
+  storage: storage,
+  fileFilter: fileFilter,
+  limits: { fileSize: 8 * 1024 * 1024 },
+});
+
+function signCloudinaryParams(params) {
+  var payload = Object.keys(params)
+    .sort()
+    .map(function (key) {
+      return key + "=" + params[key];
+    })
+    .join("&");
+
+  return crypto
+    .createHash("sha1")
+    .update(payload + CLOUDINARY_API_SECRET)
+    .digest("hex");
+}
+
+function uploadBufferToCloudinary(file, folder) {
+  return new Promise(function (resolve, reject) {
+    if (!file || !file.buffer) {
+      return resolve(null);
+    }
+
+    try {
+      requireCloudinaryConfig();
+    } catch (error) {
+      return reject(error);
+    }
+
+    var timestamp = Math.floor(Date.now() / 1000).toString();
+    var params = {
+      folder: folder,
+      timestamp: timestamp,
+    };
+    var signature = signCloudinaryParams(params);
+    var formData = new FormData();
+
+    formData.append(
+      "file",
+      new Blob([file.buffer], {
+        type: file.mimetype || "application/octet-stream",
+      }),
+      file.originalname || "upload.jpg",
+    );
+    formData.append("api_key", CLOUDINARY_API_KEY);
+    formData.append("timestamp", timestamp);
+    formData.append("folder", folder);
+    formData.append("signature", signature);
+
+    fetch(
+      "https://api.cloudinary.com/v1_1/" +
+        encodeURIComponent(CLOUDINARY_CLOUD_NAME) +
+        "/image/upload",
+      {
+        method: "POST",
+        body: formData,
+      },
+    )
+      .then(function (response) {
+        return response.text().then(function (text) {
+          if (!response.ok) {
+            throw new Error(text || "Cloudinary upload failed");
+          }
+          return text ? JSON.parse(text) : {};
+        });
+      })
+      .then(resolve)
+      .catch(reject);
+  });
+}
 
 function createSlug(value) {
   return String(value || "")
@@ -26,6 +122,22 @@ function toNumber(value, fallback) {
   if (value === undefined || value === null || value === "") return fallback;
   var number = Number(value);
   return Number.isNaN(number) ? fallback : number;
+}
+
+function parseMaybeJson(value, fallback) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function extractTournamentBanner(req) {
+  if (req.file)
+    return uploadBufferToCloudinary(req.file, "horse-racing/tournaments");
+  return Promise.resolve(req.body.banner || "");
 }
 
 function mapPrizes(prizes) {
@@ -554,6 +666,7 @@ router.post(
   "/",
   authenticate,
   requireRole("ADMIN"),
+  upload.single("banner"),
   async function (req, res, next) {
     try {
       var name = (req.body.name || "").trim();
@@ -578,18 +691,21 @@ router.post(
           .json({ error: "Tournament slug already exists" });
       }
 
+      var banner = await extractTournamentBanner(req);
+      var config = parseMaybeJson(req.body.config, {});
+
       var tournament = await Tournament.create({
         name: name,
         slug: slug,
         description: req.body.description || "",
         location: location,
-        banner: req.body.banner || "",
+        banner: banner,
         type: req.body.type || "regular",
         status: req.body.status || "Nháp",
         startDate: toDate(req.body.startDate),
         endDate: toDate(req.body.endDate),
         rules: req.body.rules || "",
-        config: req.body.config || {},
+        config: config,
         createdBy: req.user.id,
       });
 
@@ -604,6 +720,7 @@ router.patch(
   "/:identifier",
   authenticate,
   requireRole("ADMIN"),
+  upload.single("banner"),
   async function (req, res, next) {
     try {
       var tournament = await findTournamentByIdOrSlug(
@@ -625,7 +742,9 @@ router.patch(
         tournament.description = req.body.description;
       if (req.body.location !== undefined)
         tournament.location = req.body.location;
-      if (req.body.banner !== undefined) tournament.banner = req.body.banner;
+      if (req.file || req.body.banner !== undefined) {
+        tournament.banner = await extractTournamentBanner(req);
+      }
       if (req.body.type !== undefined) tournament.type = req.body.type;
       if (req.body.status !== undefined) tournament.status = req.body.status;
       if (req.body.startDate !== undefined)
@@ -635,12 +754,13 @@ router.patch(
       if (req.body.rules !== undefined) tournament.rules = req.body.rules;
 
       if (req.body.config) {
+        var nextConfig = parseMaybeJson(req.body.config, req.body.config);
         tournament.config = Object.assign(
           {},
           tournament.config.toObject
             ? tournament.config.toObject()
             : tournament.config,
-          req.body.config,
+          nextConfig,
         );
       }
 
