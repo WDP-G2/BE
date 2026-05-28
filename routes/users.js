@@ -145,4 +145,18 @@ router.get("/me", async function (req, res, next) {
   }
 });
 
+router.get("/:id", async function (req, res, next) {
+  try {
+    var user = await User.findById(req.params.id).exec();
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json(toPublicUser(user));
+  } catch (err) {
+    next(err);
+  }
+});
+
 module.exports = router;
