@@ -1,6 +1,8 @@
 var express = require("express");
 var router = express.Router();
 var mongoose = require("mongoose");
+var User = require("../models/user");
+var Horse = require("../models/horse");
 var Tournament = require("../models/tournament");
 var { authenticate, requireRole } = require("../middleware/auth");
 
@@ -74,9 +76,13 @@ function mapRace(race) {
 function mapRegistration(registration) {
   return {
     id: String(registration._id),
+    tournamentId: registration.tournamentId
+      ? String(registration.tournamentId)
+      : "",
     fullName: registration.fullName,
     ownerId: registration.ownerId ? String(registration.ownerId) : "",
     ownerName: registration.ownerName || "",
+    horseId: registration.horseId ? String(registration.horseId) : "",
     horseName: registration.horseName,
     horseAge: registration.horseAge || null,
     horseBreed: registration.horseBreed || "",
@@ -86,6 +92,115 @@ function mapRegistration(registration) {
     status: registration.status,
     notes: registration.notes || "",
     registeredAt: registration.registeredAt,
+  };
+}
+
+function mapPublicUser(user) {
+  if (!user) return null;
+  return {
+    id: String(user._id),
+    username: user.username || user.email?.split("@")[0] || "",
+    fullName: user.fullName || user.name || "",
+    name: user.name || user.fullName || "",
+    email: user.email || "",
+    phone: user.phone || "",
+    role: user.role || "USER",
+  };
+}
+
+function mapHorseOption(horse) {
+  return {
+    id: String(horse._id),
+    slug: horse.slug,
+    name: horse.name,
+    breed: horse.breed || "",
+    gender: horse.gender || "",
+    birthDate: horse.birthDate || null,
+    ownerName: horse.ownerName || "",
+    imageUrl: horse.imageUrl || "",
+    licenseImageUrl: horse.licenseImageUrl || "",
+    healthStatus: horse.healthStatus || "Chưa cập nhật",
+    racingStatus: horse.racingStatus || "can-race",
+    canRace: horse.racingStatus !== "cannot-race",
+    notes: horse.notes || "",
+  };
+}
+
+function isTournamentOpenForRegistration(tournament) {
+  return tournament && tournament.status === "Đang mở đăng ký";
+}
+
+function isRaceOpenForRegistration(tournament, race) {
+  if (!tournament || !race) return false;
+  if (!isTournamentOpenForRegistration(tournament)) return false;
+  if (race.status === "Nháp") return false;
+
+  var deadline = race.regDeadline || tournament.config?.deadlineAt || null;
+  if (deadline) {
+    var deadlineDate = new Date(deadline);
+    if (
+      !Number.isNaN(deadlineDate.getTime()) &&
+      deadlineDate.getTime() < Date.now()
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function findRaceIdsRegistrations(tournament, raceId) {
+  return (tournament.registrations || []).filter(function (item) {
+    return String(item.raceId || "") === String(raceId || "");
+  });
+}
+
+async function buildOwnerRaceOptions(tournament, race, ownerId) {
+  var [horses, jockeys] = await Promise.all([
+    Horse.find({ createdBy: ownerId }).sort({ createdAt: -1 }).exec(),
+    User.find({ role: "JOCKEY" }).sort({ fullName: 1, name: 1 }).exec(),
+  ]);
+
+  var raceRegistrations = findRaceIdsRegistrations(tournament, race._id);
+  var usedHorseIds = new Set(
+    raceRegistrations
+      .map(function (item) {
+        return String(item.horseId || "");
+      })
+      .filter(Boolean),
+  );
+  var usedJockeyIds = new Set(
+    raceRegistrations
+      .map(function (item) {
+        return String(item.jockeyId || "");
+      })
+      .filter(Boolean),
+  );
+
+  return {
+    tournament: mapTournament(tournament),
+    race: mapRace(race),
+    horses: horses.map(function (horse) {
+      var option = mapHorseOption(horse);
+      var unavailableReason = "";
+
+      if (horse.racingStatus === "cannot-race") {
+        unavailableReason = "Ngựa đang ở trạng thái không thể đua";
+      } else if (usedHorseIds.has(String(horse._id))) {
+        unavailableReason = "Ngựa đã được chọn cho race này";
+      }
+
+      return Object.assign({}, option, {
+        available: unavailableReason === "",
+        unavailableReason: unavailableReason,
+      });
+    }),
+    jockeys: jockeys
+      .filter(function (jockey) {
+        return !usedJockeyIds.has(String(jockey._id));
+      })
+      .map(mapPublicUser),
+    registrations: raceRegistrations.map(mapRegistration),
   };
 }
 
@@ -185,6 +300,68 @@ router.get("/", async function (req, res, next) {
     next(err);
   }
 });
+
+router.get("/owner/open", async function (req, res, next) {
+  try {
+    var tournaments = await Tournament.find({ status: "Đang mở đăng ký" })
+      .sort({ createdAt: -1 })
+      .exec();
+
+    res.json(
+      tournaments.map(function (tournament) {
+        var openRaces = (tournament.races || [])
+          .filter(function (race) {
+            return isRaceOpenForRegistration(tournament, race);
+          })
+          .map(mapRace);
+
+        return Object.assign({}, mapTournament(tournament), {
+          races: openRaces,
+          openRaceCount: openRaces.length,
+        });
+      }),
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get(
+  "/owner/registrations",
+  authenticate,
+  requireRole("OWNER", "ADMIN"),
+  async function (req, res, next) {
+    try {
+      var tournaments = await Tournament.find({
+        "registrations.ownerId": req.user.id,
+      })
+        .sort({ updatedAt: -1 })
+        .exec();
+
+      var registrations = [];
+      tournaments.forEach(function (tournament) {
+        (tournament.registrations || []).forEach(function (registration) {
+          if (String(registration.ownerId || "") === String(req.user.id)) {
+            var race = tournament.races.id(registration.raceId);
+            registrations.push(
+              Object.assign({}, mapRegistration(registration), {
+                tournamentId: String(tournament._id),
+                tournamentName: tournament.name,
+                tournamentStatus: tournament.status,
+                raceName: race ? race.name : "",
+                raceStatus: race ? race.status : "",
+              }),
+            );
+          }
+        });
+      });
+
+      res.json(registrations);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 router.get("/:identifier", async function (req, res, next) {
   try {
@@ -354,6 +531,39 @@ router.get("/:identifier/races", async function (req, res, next) {
   }
 });
 
+router.get(
+  "/:identifier/races/:raceId/owner-options",
+  authenticate,
+  requireRole("OWNER", "ADMIN"),
+  async function (req, res, next) {
+    try {
+      var tournament = await findTournamentByIdOrSlug(
+        req.params.identifier,
+      ).exec();
+
+      if (!tournament) {
+        return res.status(404).json({ error: "Tournament not found" });
+      }
+
+      var race = tournament.races.id(req.params.raceId);
+      if (!race) {
+        return res.status(404).json({ error: "Race not found" });
+      }
+
+      if (!isRaceOpenForRegistration(tournament, race)) {
+        return res
+          .status(409)
+          .json({ error: "Race is not open for registration" });
+      }
+
+      var options = await buildOwnerRaceOptions(tournament, race, req.user.id);
+      res.json(options);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 router.post(
   "/:identifier/races",
   authenticate,
@@ -513,8 +723,9 @@ router.get("/:identifier/registrations", async function (req, res, next) {
 });
 
 router.post(
-  "/:identifier/registrations",
+  "/:identifier/owner/registrations",
   authenticate,
+  requireRole("OWNER", "ADMIN"),
   async function (req, res, next) {
     try {
       var tournament = await findTournamentByIdOrSlug(
@@ -525,31 +736,101 @@ router.post(
         return res.status(404).json({ error: "Tournament not found" });
       }
 
+      if (!isTournamentOpenForRegistration(tournament)) {
+        return res
+          .status(409)
+          .json({ error: "Tournament is not open for registration" });
+      }
+
+      var raceId = req.body.raceId || "";
+      var race = raceId ? tournament.races.id(raceId) : null;
+      if (!race) {
+        return res.status(400).json({ error: "Race is required" });
+      }
+
+      if (!isRaceOpenForRegistration(tournament, race)) {
+        return res
+          .status(409)
+          .json({ error: "Race is not open for registration" });
+      }
+
+      var horseId = req.body.horseId || "";
+      var jockeyId = req.body.jockeyId || "";
       var fullName = (
         req.body.fullName ||
         req.user.fullName ||
         req.user.username ||
         ""
       ).trim();
-      var horseName = (req.body.horseName || "").trim();
-      var jockeyName = (req.body.jockeyName || "").trim();
+      var horse = horseId ? await Horse.findById(horseId).exec() : null;
+      var jockey = jockeyId ? await User.findById(jockeyId).exec() : null;
 
-      if (!fullName || !horseName) {
-        return res
-          .status(400)
-          .json({ error: "Registrant name and horse name are required" });
+      if (!fullName) {
+        return res.status(400).json({ error: "Registrant name is required" });
       }
 
+      if (!horse || String(horse.createdBy || "") !== String(req.user.id)) {
+        return res.status(404).json({ error: "Horse not found" });
+      }
+
+      if (horse.racingStatus === "cannot-race") {
+        return res.status(400).json({ error: "Horse cannot race" });
+      }
+
+      if (!jockey || jockey.role !== "JOCKEY") {
+        return res.status(404).json({ error: "Jockey not found" });
+      }
+
+      var horseAlreadyUsed = (tournament.registrations || []).some(
+        function (item) {
+          return (
+            String(item.raceId || "") === String(race._id) &&
+            String(item.horseId || "") === String(horse._id)
+          );
+        },
+      );
+
+      if (horseAlreadyUsed) {
+        return res
+          .status(409)
+          .json({ error: "Horse is already registered for this race" });
+      }
+
+      var jockeyAlreadyUsed = (tournament.registrations || []).some(
+        function (item) {
+          return (
+            String(item.raceId || "") === String(race._id) &&
+            String(item.jockeyId || "") === String(jockey._id)
+          );
+        },
+      );
+
+      if (jockeyAlreadyUsed) {
+        return res
+          .status(409)
+          .json({ error: "Jockey is already registered for this race" });
+      }
+
+      var horseName = (req.body.horseName || horse.name || "").trim();
+      var jockeyName = (
+        req.body.jockeyName ||
+        jockey.fullName ||
+        jockey.name ||
+        ""
+      ).trim();
+
       tournament.registrations.push({
+        tournamentId: tournament._id,
         fullName: fullName,
         ownerId: req.user.id,
         ownerName: req.user.fullName || req.user.username || fullName,
+        horseId: horse._id,
         horseName: horseName,
         horseAge: req.body.horseAge ? Number(req.body.horseAge) : undefined,
-        horseBreed: req.body.horseBreed || "",
-        jockeyId: req.body.jockeyId || undefined,
+        horseBreed: req.body.horseBreed || horse.breed || "",
+        jockeyId: jockey._id,
         jockeyName: jockeyName,
-        raceId: req.body.raceId || undefined,
+        raceId: race._id,
         status: req.body.status || "Chờ duyệt",
         notes: req.body.notes || "",
       });

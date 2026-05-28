@@ -44,7 +44,12 @@ var RaceSchema = new Schema(
     deposit: { type: Number, default: 0 },
     regDeadline: { type: Date },
     checkIn: { type: String, default: "" },
-    prizes: { type: PrizeSchema, default: function () { return {}; } },
+    prizes: {
+      type: PrizeSchema,
+      default: function () {
+        return {};
+      },
+    },
     results: [ResultSchema],
   },
   { _id: true },
@@ -52,9 +57,11 @@ var RaceSchema = new Schema(
 
 var RegistrationSchema = new Schema(
   {
+    tournamentId: { type: Schema.Types.ObjectId, ref: "Tournament" },
     fullName: { type: String, required: true },
     ownerId: { type: Schema.Types.ObjectId, ref: "User" },
     ownerName: { type: String },
+    horseId: { type: Schema.Types.ObjectId, ref: "Horse" },
     horseName: { type: String, required: true },
     horseAge: { type: Number },
     horseBreed: { type: String },
