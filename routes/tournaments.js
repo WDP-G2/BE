@@ -108,6 +108,44 @@ function mapPublicUser(user) {
   };
 }
 
+function toDayKey(value) {
+  if (!value) return "";
+  var date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  var year = date.getFullYear();
+  var month = String(date.getMonth() + 1).padStart(2, "0");
+  var day = String(date.getDate()).padStart(2, "0");
+  return year + "-" + month + "-" + day;
+}
+
+function getRaceStartDate(tournament, race) {
+  if (!race && !tournament) return null;
+  var date =
+    race && race.scheduledAt
+      ? race.scheduledAt
+      : tournament && tournament.startDate
+        ? tournament.startDate
+        : null;
+  if (!date) return null;
+  var parsed = new Date(date);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function getRaceEndDate(tournament, race) {
+  var start = getRaceStartDate(tournament, race);
+  if (!start) return null;
+  return new Date(start.getTime() + 60 * 60 * 1000);
+}
+
+function rangesOverlap(startA, endA, startB, endB) {
+  if (!startA || !endA || !startB || !endB) return false;
+  return startA.getTime() < endB.getTime() && startB.getTime() < endA.getTime();
+}
+
+function sameDay(dateA, dateB) {
+  return toDayKey(dateA) === toDayKey(dateB);
+}
+
 function mapHorseOption(horse) {
   return {
     id: String(horse._id),
@@ -123,6 +161,10 @@ function mapHorseOption(horse) {
     racingStatus: horse.racingStatus || "can-race",
     canRace: horse.racingStatus !== "cannot-race",
     notes: horse.notes || "",
+    wins: Number(horse.wins || 0),
+    races: Number(horse.races || 0),
+    achievements: Array.isArray(horse.achievements) ? horse.achievements : [],
+    history: Array.isArray(horse.history) ? horse.history : [],
   };
 }
 
@@ -149,6 +191,39 @@ function isRaceOpenForRegistration(tournament, race) {
   return true;
 }
 
+function getRegistrationRaceInfo(registration, tournament) {
+  if (!registration || !tournament) return null;
+  if (!registration.raceId) return null;
+  return tournament.races.id(registration.raceId) || null;
+}
+
+function horseMatchesRegistration(horse, registration) {
+  var horseId = String(horse._id || "");
+  var registrationHorseId = String(registration.horseId || "");
+  var horseName = String(horse.name || "")
+    .trim()
+    .toLowerCase();
+  var registrationHorseName = String(registration.horseName || "")
+    .trim()
+    .toLowerCase();
+
+  if (registrationHorseId && registrationHorseId === horseId) return true;
+  if (!registrationHorseId && registrationHorseName === horseName) return true;
+  return false;
+}
+
+function getHorseRegistrationConflict(ownerRegistrations, horse) {
+  return ownerRegistrations.find(function (item) {
+    return horseMatchesRegistration(horse, item.registration);
+  });
+}
+
+function getJockeyRegistrationConflict(jockeyRegistrations, jockeyId) {
+  return jockeyRegistrations.find(function (item) {
+    return String(item.registration.jockeyId || "") === String(jockeyId || "");
+  });
+}
+
 function findRaceIdsRegistrations(tournament, raceId) {
   return (tournament.registrations || []).filter(function (item) {
     return String(item.raceId || "") === String(raceId || "");
@@ -160,6 +235,10 @@ async function buildOwnerRaceOptions(tournament, race, ownerId) {
     Horse.find({ createdBy: ownerId }).sort({ createdAt: -1 }).exec(),
     User.find({ role: "JOCKEY" }).sort({ fullName: 1, name: 1 }).exec(),
   ]);
+
+  var allTournaments = await Tournament.find({}).exec();
+  var selectedRaceStart = getRaceStartDate(tournament, race);
+  var selectedRaceEnd = getRaceEndDate(tournament, race);
 
   var raceRegistrations = findRaceIdsRegistrations(tournament, race._id);
   var usedHorseIds = new Set(
@@ -176,6 +255,26 @@ async function buildOwnerRaceOptions(tournament, race, ownerId) {
       })
       .filter(Boolean),
   );
+  var ownerRegistrations = [];
+  var jockeyRegistrations = [];
+
+  allTournaments.forEach(function (currentTournament) {
+    (currentTournament.registrations || []).forEach(function (registration) {
+      if (String(registration.ownerId || "") === String(ownerId)) {
+        ownerRegistrations.push({
+          tournament: currentTournament,
+          registration: registration,
+        });
+      }
+
+      if (registration.jockeyId) {
+        jockeyRegistrations.push({
+          tournament: currentTournament,
+          registration: registration,
+        });
+      }
+    });
+  });
 
   return {
     tournament: mapTournament(tournament),
@@ -188,6 +287,37 @@ async function buildOwnerRaceOptions(tournament, race, ownerId) {
         unavailableReason = "Ngựa đang ở trạng thái không thể đua";
       } else if (usedHorseIds.has(String(horse._id))) {
         unavailableReason = "Ngựa đã được chọn cho race này";
+      } else if (selectedRaceStart) {
+        var horseConflict = ownerRegistrations.find(function (item) {
+          var registrationHorseId = String(item.registration.horseId || "");
+          var registrationHorseName = String(item.registration.horseName || "")
+            .trim()
+            .toLowerCase();
+          var horseName = String(horse.name || "")
+            .trim()
+            .toLowerCase();
+          if (
+            registrationHorseId &&
+            registrationHorseId === String(horse._id)
+          ) {
+            return true;
+          }
+          return !registrationHorseId && registrationHorseName === horseName;
+        });
+
+        if (horseConflict) {
+          var horseRace = horseConflict.tournament.races.id(
+            horseConflict.registration.raceId,
+          );
+          var horseRaceStart = getRaceStartDate(
+            horseConflict.tournament,
+            horseRace,
+          );
+
+          if (horseRaceStart && sameDay(horseRaceStart, selectedRaceStart)) {
+            unavailableReason = "Mỗi ngày ngựa chỉ được đua 1 race";
+          }
+        }
       }
 
       return Object.assign({}, option, {
@@ -195,11 +325,52 @@ async function buildOwnerRaceOptions(tournament, race, ownerId) {
         unavailableReason: unavailableReason,
       });
     }),
-    jockeys: jockeys
-      .filter(function (jockey) {
-        return !usedJockeyIds.has(String(jockey._id));
-      })
-      .map(mapPublicUser),
+    jockeys: jockeys.map(function (jockey) {
+      var option = mapPublicUser(jockey);
+      var unavailableReason = "";
+
+      if (usedJockeyIds.has(String(jockey._id))) {
+        unavailableReason = "Jockey đã được chọn cho race này";
+      } else if (selectedRaceStart && selectedRaceEnd) {
+        var jockeyConflict = jockeyRegistrations.find(function (item) {
+          return (
+            String(item.registration.jockeyId || "") === String(jockey._id)
+          );
+        });
+
+        if (jockeyConflict) {
+          var jockeyRace = jockeyConflict.tournament.races.id(
+            jockeyConflict.registration.raceId,
+          );
+          var jockeyRaceStart = getRaceStartDate(
+            jockeyConflict.tournament,
+            jockeyRace,
+          );
+          var jockeyRaceEnd = getRaceEndDate(
+            jockeyConflict.tournament,
+            jockeyRace,
+          );
+
+          if (
+            jockeyRaceStart &&
+            jockeyRaceEnd &&
+            rangesOverlap(
+              selectedRaceStart,
+              selectedRaceEnd,
+              jockeyRaceStart,
+              jockeyRaceEnd,
+            )
+          ) {
+            unavailableReason = "Jockey trùng khung giờ với race khác";
+          }
+        }
+      }
+
+      return Object.assign({}, option, {
+        available: unavailableReason === "",
+        unavailableReason: unavailableReason,
+      });
+    }),
     registrations: raceRegistrations.map(mapRegistration),
   };
 }
@@ -781,34 +952,27 @@ router.post(
         return res.status(404).json({ error: "Jockey not found" });
       }
 
-      var horseAlreadyUsed = (tournament.registrations || []).some(
-        function (item) {
-          return (
-            String(item.raceId || "") === String(race._id) &&
-            String(item.horseId || "") === String(horse._id)
-          );
-        },
-      );
-
-      if (horseAlreadyUsed) {
-        return res
-          .status(409)
-          .json({ error: "Horse is already registered for this race" });
+      var options = await buildOwnerRaceOptions(tournament, race, req.user.id);
+      var selectedHorseOption = options.horses.find(function (item) {
+        return String(item.id || "") === String(horse._id || "");
+      });
+      if (!selectedHorseOption || selectedHorseOption.available === false) {
+        return res.status(409).json({
+          error:
+            (selectedHorseOption && selectedHorseOption.unavailableReason) ||
+            "Ngựa không khả dụng cho race này",
+        });
       }
 
-      var jockeyAlreadyUsed = (tournament.registrations || []).some(
-        function (item) {
-          return (
-            String(item.raceId || "") === String(race._id) &&
-            String(item.jockeyId || "") === String(jockey._id)
-          );
-        },
-      );
-
-      if (jockeyAlreadyUsed) {
-        return res
-          .status(409)
-          .json({ error: "Jockey is already registered for this race" });
+      var selectedJockeyOption = options.jockeys.find(function (item) {
+        return String(item.id || "") === String(jockey._id || "");
+      });
+      if (!selectedJockeyOption || selectedJockeyOption.available === false) {
+        return res.status(409).json({
+          error:
+            (selectedJockeyOption && selectedJockeyOption.unavailableReason) ||
+            "Jockey không khả dụng cho race này",
+        });
       }
 
       var horseName = (req.body.horseName || horse.name || "").trim();
