@@ -6,6 +6,7 @@ var multer = require("multer");
 var User = require("../models/user");
 var Horse = require("../models/horse");
 var Tournament = require("../models/tournament");
+var JockeyInvitation = require("../models/jockeyInvitation");
 var { authenticate, requireRole } = require("../middleware/auth");
 
 var CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || "";
@@ -342,11 +343,35 @@ function findRaceIdsRegistrations(tournament, raceId) {
   });
 }
 
+async function getOwnerEligibleJockeyIds(ownerId, tournament) {
+  var ownerObjectId = mongoose.Types.ObjectId.isValid(ownerId)
+    ? new mongoose.Types.ObjectId(ownerId)
+    : ownerId;
+
+  var acceptedInvitations = await JockeyInvitation.find({
+    ownerId: ownerObjectId,
+    tournamentId: tournament._id,
+    status: "Đã chấp nhận",
+  }).exec();
+
+  var eligible = new Set();
+
+  acceptedInvitations.forEach(function (invitation) {
+    if (invitation.jockeyId) {
+      eligible.add(String(invitation.jockeyId));
+    }
+  });
+
+  return {
+    ids: eligible,
+    acceptedInvitations: acceptedInvitations,
+  };
+}
+
 async function buildOwnerRaceOptions(tournament, race, ownerId) {
-  var [horses, jockeys] = await Promise.all([
-    Horse.find({ createdBy: ownerId }).sort({ createdAt: -1 }).exec(),
-    User.find({ role: "JOCKEY" }).sort({ fullName: 1, name: 1 }).exec(),
-  ]);
+  var horses = await Horse.find({ createdBy: ownerId })
+    .sort({ createdAt: -1 })
+    .exec();
 
   var allTournaments = await Tournament.find({}).exec();
   var selectedRaceStart = getRaceStartDate(tournament, race);
@@ -387,6 +412,22 @@ async function buildOwnerRaceOptions(tournament, race, ownerId) {
       }
     });
   });
+
+  var eligibleJockeys = await getOwnerEligibleJockeyIds(ownerId, tournament);
+  var eligibleJockeyIds = eligibleJockeys.ids;
+  var eligibleObjectIds = Array.from(eligibleJockeyIds)
+    .filter(function (id) {
+      return mongoose.Types.ObjectId.isValid(id);
+    })
+    .map(function (id) {
+      return new mongoose.Types.ObjectId(id);
+    });
+
+  var ownerJockeys = eligibleObjectIds.length
+    ? await User.find({ role: "JOCKEY", _id: { $in: eligibleObjectIds } })
+        .sort({ fullName: 1, name: 1, username: 1 })
+        .exec()
+    : [];
 
   return {
     tournament: mapTournament(tournament),
@@ -437,17 +478,17 @@ async function buildOwnerRaceOptions(tournament, race, ownerId) {
         unavailableReason: unavailableReason,
       });
     }),
-    jockeys: jockeys.map(function (jockey) {
+    jockeys: ownerJockeys.map(function (jockey) {
       var option = mapPublicUser(jockey);
       var unavailableReason = "";
+      var jockeyId = String(jockey._id);
+      var relationship = "Đã nhận lời mời";
 
-      if (usedJockeyIds.has(String(jockey._id))) {
+      if (usedJockeyIds.has(jockeyId)) {
         unavailableReason = "Jockey đã được chọn cho race này";
       } else if (selectedRaceStart && selectedRaceEnd) {
         var jockeyConflict = jockeyRegistrations.find(function (item) {
-          return (
-            String(item.registration.jockeyId || "") === String(jockey._id)
-          );
+          return String(item.registration.jockeyId || "") === jockeyId;
         });
 
         if (jockeyConflict) {
@@ -481,6 +522,7 @@ async function buildOwnerRaceOptions(tournament, race, ownerId) {
       return Object.assign({}, option, {
         available: unavailableReason === "",
         unavailableReason: unavailableReason,
+        relationship: relationship,
       });
     }),
     registrations: raceRegistrations.map(mapRegistration),
@@ -615,8 +657,12 @@ router.get(
   requireRole("OWNER", "ADMIN"),
   async function (req, res, next) {
     try {
+      var ownerObjectId = mongoose.Types.ObjectId.isValid(req.user.id)
+        ? new mongoose.Types.ObjectId(req.user.id)
+        : req.user.id;
+
       var tournaments = await Tournament.find({
-        "registrations.ownerId": req.user.id,
+        "registrations.ownerId": ownerObjectId,
       })
         .sort({ updatedAt: -1 })
         .exec();
@@ -624,7 +670,10 @@ router.get(
       var registrations = [];
       tournaments.forEach(function (tournament) {
         (tournament.registrations || []).forEach(function (registration) {
-          if (String(registration.ownerId || "") === String(req.user.id)) {
+          if (
+            String(registration.ownerId || "") === String(req.user.id) ||
+            String(registration.ownerId || "") === String(ownerObjectId)
+          ) {
             var race = tournament.races.id(registration.raceId);
             registrations.push(
               Object.assign({}, mapRegistration(registration), {
@@ -1073,6 +1122,15 @@ router.post(
       }
 
       var options = await buildOwnerRaceOptions(tournament, race, req.user.id);
+      var jockeyAllowed = (options.jockeys || []).some(function (item) {
+        return String(item.id || "") === String(jockey._id);
+      });
+      if (!jockeyAllowed) {
+        return res.status(403).json({
+          error:
+            "Jockey chưa nhận lời mời cho giải này hoặc chưa thi đấu cho bạn",
+        });
+      }
       var selectedHorseOption = options.horses.find(function (item) {
         return String(item.id || "") === String(horse._id || "");
       });
@@ -1121,6 +1179,49 @@ router.post(
 
       await tournament.save();
       res.status(201).json(mapTournament(tournament));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.patch(
+  "/:identifier/registrations/:registrationId",
+  authenticate,
+  requireRole("ADMIN", "REFEREE"),
+  async function (req, res, next) {
+    try {
+      var tournament = await findTournamentByIdOrSlug(
+        req.params.identifier,
+      ).exec();
+
+      if (!tournament) {
+        return res.status(404).json({ error: "Tournament not found" });
+      }
+
+      var registration = tournament.registrations.id(
+        req.params.registrationId,
+      );
+      if (!registration) {
+        return res.status(404).json({ error: "Registration not found" });
+      }
+
+      var status = String(req.body.status || "").trim();
+      var allowedStatuses = [
+        "Chờ duyệt",
+        "Đã duyệt",
+        "Từ chối",
+        "Đang chạy",
+        "Hoàn thành",
+      ];
+
+      if (allowedStatuses.indexOf(status) === -1) {
+        return res.status(400).json({ error: "Invalid registration status" });
+      }
+
+      registration.status = status;
+      await tournament.save();
+      res.json(mapTournament(tournament));
     } catch (err) {
       next(err);
     }

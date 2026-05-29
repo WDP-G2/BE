@@ -9,6 +9,7 @@ var usersRouter = require("./routes/users");
 var tournamentsRouter = require("./routes/tournaments");
 var newsRouter = require("./routes/news");
 var horsesRouter = require("./routes/horses");
+var invitationsRouter = require("./routes/invitations");
 // initialize DB (reads MONGODB_URI)
 require("./db");
 var { seedSampleData } = require("./scripts/seedSampleData");
@@ -30,6 +31,7 @@ app.use("/users", usersRouter);
 app.use("/tournaments", tournamentsRouter);
 app.use("/news", newsRouter);
 app.use("/horses", horsesRouter);
+app.use("/invitations", invitationsRouter);
 
 if (process.env.MONGODB_URI) {
   seedSampleData().catch(function (err) {
