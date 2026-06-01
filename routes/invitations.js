@@ -130,6 +130,25 @@ router.post(
         return res.status(404).json({ error: "Race not found" });
       }
 
+      var existingRegistration = (tournament.registrations || []).find(
+        function (registration) {
+          var sameJockey =
+            String(registration.jockeyId || "") === String(jockey._id);
+          var sameHorse =
+            String(registration.horseId || "") === String(horse._id);
+          var sameRace = raceId
+            ? String(registration.raceId || "") === String(race?._id || "")
+            : true;
+          return sameJockey && sameHorse && sameRace;
+        },
+      );
+
+      if (existingRegistration) {
+        return res.status(409).json({
+          error: "Jockey và ngựa đã được đăng ký cho race này",
+        });
+      }
+
       var duplicateFilter = {
         ownerId: req.user.id,
         jockeyId: jockey._id,
@@ -150,7 +169,8 @@ router.post(
       var raceLabel = race
         ? "Race R" + (race.raceNumber || "") + " · " + (race.name || "")
         : "";
-      var scheduledAt = race && race.scheduledAt ? new Date(race.scheduledAt) : null;
+      var scheduledAt =
+        race && race.scheduledAt ? new Date(race.scheduledAt) : null;
 
       var invitation = await JockeyInvitation.create({
         ownerId: req.user.id,
@@ -165,10 +185,15 @@ router.post(
         tournamentName: tournament.name,
         raceId: race ? race._id : undefined,
         raceLabel: raceLabel,
-        raceDate: scheduledAt ? toDateInput(scheduledAt) : toDateInput(tournament.startDate),
+        raceDate: scheduledAt
+          ? toDateInput(scheduledAt)
+          : toDateInput(tournament.startDate),
         raceTime: scheduledAt ? toTimeInput(scheduledAt) : "",
         location: tournament.location || race?.track || "",
-        reward: reward > 0 ? reward : race?.entryFee || tournament.config?.entryFee || 0,
+        reward:
+          reward > 0
+            ? reward
+            : race?.entryFee || tournament.config?.entryFee || 0,
         status: "Chờ xử lý",
       });
 
@@ -254,7 +279,9 @@ router.patch(
       } else if (action === "reject") {
         invitation.status = "Đã từ chối";
       } else {
-        return res.status(400).json({ error: "action must be accept or reject" });
+        return res
+          .status(400)
+          .json({ error: "action must be accept or reject" });
       }
 
       invitation.respondedAt = new Date();

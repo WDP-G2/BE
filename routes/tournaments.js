@@ -119,6 +119,20 @@ function toDate(value) {
   return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
+function toDateInput(value) {
+  if (!value) return "";
+  var date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(0, 10);
+}
+
+function toTimeInput(value) {
+  if (!value) return "";
+  var date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString().slice(11, 16);
+}
+
 function toNumber(value, fallback) {
   if (value === undefined || value === null || value === "") return fallback;
   var number = Number(value);
@@ -695,6 +709,98 @@ router.get(
   },
 );
 
+router.get(
+  "/jockey/registrations",
+  authenticate,
+  requireRole("JOCKEY", "ADMIN"),
+  async function (req, res, next) {
+    try {
+      var jockeyObjectId = mongoose.Types.ObjectId.isValid(req.user.id)
+        ? new mongoose.Types.ObjectId(req.user.id)
+        : req.user.id;
+
+      var tournaments = await Tournament.find({
+        "registrations.jockeyId": jockeyObjectId,
+      })
+        .sort({ updatedAt: -1 })
+        .exec();
+
+      var horseIds = new Set();
+      tournaments.forEach(function (tournament) {
+        (tournament.registrations || []).forEach(function (registration) {
+          if (
+            String(registration.jockeyId || "") === String(req.user.id) ||
+            String(registration.jockeyId || "") === String(jockeyObjectId)
+          ) {
+            if (registration.horseId) {
+              horseIds.add(String(registration.horseId));
+            }
+          }
+        });
+      });
+
+      var horseObjectIds = Array.from(horseIds)
+        .filter(function (id) {
+          return mongoose.Types.ObjectId.isValid(id);
+        })
+        .map(function (id) {
+          return new mongoose.Types.ObjectId(id);
+        });
+
+      var horses = horseObjectIds.length
+        ? await Horse.find({ _id: { $in: horseObjectIds } }).exec()
+        : [];
+
+      var horsesById = {};
+      horses.forEach(function (horse) {
+        horsesById[String(horse._id)] = horse;
+      });
+
+      var registrations = [];
+      tournaments.forEach(function (tournament) {
+        (tournament.registrations || []).forEach(function (registration) {
+          if (
+            String(registration.jockeyId || "") === String(req.user.id) ||
+            String(registration.jockeyId || "") === String(jockeyObjectId)
+          ) {
+            var race = tournament.races.id(registration.raceId);
+            var scheduledAt =
+              race && race.scheduledAt ? new Date(race.scheduledAt) : null;
+            var horseDoc =
+              horsesById[String(registration.horseId || "")] || null;
+            registrations.push(
+              Object.assign({}, mapRegistration(registration), {
+                tournamentId: String(tournament._id),
+                tournamentName: tournament.name,
+                tournamentStatus: tournament.status,
+                raceName: race ? race.name : "",
+                raceNumber: race ? race.raceNumber || "" : "",
+                raceStatus: race ? race.status : "",
+                raceDate: scheduledAt
+                  ? toDateInput(scheduledAt)
+                  : toDateInput(tournament.startDate),
+                raceTime: scheduledAt ? toTimeInput(scheduledAt) : "",
+                location: (race && race.track) || tournament.location || "",
+                horseHealth: horseDoc ? horseDoc.healthStatus : "",
+                horseBirthDate: horseDoc ? toDateInput(horseDoc.birthDate) : "",
+                horseWins: horseDoc ? horseDoc.wins : 0,
+                horseRaces: horseDoc ? horseDoc.races : 0,
+                horseNotes: horseDoc ? horseDoc.notes : "",
+                horseGender: horseDoc ? horseDoc.gender : "",
+                horseImageUrl: horseDoc ? horseDoc.imageUrl : "",
+              }),
+            );
+          }
+        });
+      });
+
+      res.json(registrations);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 router.get("/:identifier", async function (req, res, next) {
   try {
     var tournament = await findTournamentByIdOrSlug(
@@ -1199,9 +1305,7 @@ router.patch(
         return res.status(404).json({ error: "Tournament not found" });
       }
 
-      var registration = tournament.registrations.id(
-        req.params.registrationId,
-      );
+      var registration = tournament.registrations.id(req.params.registrationId);
       if (!registration) {
         return res.status(404).json({ error: "Registration not found" });
       }
