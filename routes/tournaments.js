@@ -12,6 +12,7 @@ var { authenticate, requireRole } = require("../middleware/auth");
 var CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || "";
 var CLOUDINARY_API_KEY = process.env.CLOUDINARY_API_KEY || "";
 var CLOUDINARY_API_SECRET = process.env.CLOUDINARY_API_SECRET || "";
+var MIN_RACE_AGE_MONTHS = 24;
 
 function requireCloudinaryConfig() {
   if (!CLOUDINARY_CLOUD_NAME || !CLOUDINARY_API_KEY || !CLOUDINARY_API_SECRET) {
@@ -260,6 +261,31 @@ function toDayKey(value) {
   return year + "-" + month + "-" + day;
 }
 
+function getAgeInMonths(birthDate, referenceDate) {
+  if (!birthDate) return null;
+  var birth = new Date(birthDate);
+  var reference = referenceDate ? new Date(referenceDate) : new Date();
+  if (Number.isNaN(birth.getTime()) || Number.isNaN(reference.getTime())) {
+    return null;
+  }
+  var months =
+    (reference.getFullYear() - birth.getFullYear()) * 12 +
+    (reference.getMonth() - birth.getMonth());
+  if (reference.getDate() < birth.getDate()) months -= 1;
+  return months;
+}
+
+function getHorseAgeRestriction(horse, referenceDate) {
+  var ageMonths = getAgeInMonths(horse && horse.birthDate, referenceDate);
+  if (ageMonths === null) {
+    return "Ngựa cần có ngày sinh để kiểm tra tuổi thi đấu";
+  }
+  if (ageMonths < MIN_RACE_AGE_MONTHS) {
+    return "Ngựa chưa đủ " + MIN_RACE_AGE_MONTHS + " tháng tuổi để thi đấu";
+  }
+  return "";
+}
+
 function getRaceStartDate(tournament, race) {
   if (!race && !tournament) return null;
   var date =
@@ -464,9 +490,12 @@ async function buildOwnerRaceOptions(tournament, race, ownerId) {
     horses: horses.map(function (horse) {
       var option = mapHorseOption(horse);
       var unavailableReason = "";
+      var ageRestriction = getHorseAgeRestriction(horse, selectedRaceStart);
 
       if (horse.racingStatus === "cannot-race") {
         unavailableReason = "Ngựa đang ở trạng thái không thể đua";
+      } else if (ageRestriction) {
+        unavailableReason = ageRestriction;
       } else if (usedHorseIds.has(String(horse._id))) {
         unavailableReason = "Ngựa đã được chọn cho race này";
       } else if (selectedRaceStart) {
@@ -1252,6 +1281,11 @@ router.post(
 
       if (horse.racingStatus === "cannot-race") {
         return res.status(400).json({ error: "Horse cannot race" });
+      }
+
+      var ageRestriction = getHorseAgeRestriction(horse, getRaceStartDate(tournament, race));
+      if (ageRestriction) {
+        return res.status(400).json({ error: ageRestriction });
       }
 
       if (!jockey || jockey.role !== "JOCKEY") {
