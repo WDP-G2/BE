@@ -5,6 +5,7 @@ var multer = require("multer");
 var router = express.Router();
 
 var Horse = require("../models/horse");
+var Tournament = require("../models/tournament");
 var User = require("../models/user");
 var { authenticate, requireRole } = require("../middleware/auth");
 var JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
@@ -12,6 +13,13 @@ var JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 var CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || "";
 var CLOUDINARY_API_KEY = process.env.CLOUDINARY_API_KEY || "";
 var CLOUDINARY_API_SECRET = process.env.CLOUDINARY_API_SECRET || "";
+var ACTIVE_TOURNAMENT_STATUSES = ["Nháp", "Đang mở đăng ký", "Đang diễn ra"];
+var ACTIVE_REGISTRATION_STATUSES = [
+  "Chờ duyệt",
+  "Đã duyệt",
+  "Đang chạy",
+  "Hoàn thành",
+];
 
 function requireCloudinaryConfig() {
   if (!CLOUDINARY_CLOUD_NAME || !CLOUDINARY_API_KEY || !CLOUDINARY_API_SECRET) {
@@ -232,6 +240,24 @@ function canManageHorse(req, horse) {
   return String(horse.createdBy || "") === String(req.user.id || "");
 }
 
+function getOwnerDisplayName(user) {
+  return user.fullName || user.username || user.email || "";
+}
+
+async function findActiveHorseRegistration(horseId) {
+  return Tournament.findOne({
+    status: { $in: ACTIVE_TOURNAMENT_STATUSES },
+    registrations: {
+      $elemMatch: {
+        horseId: horseId,
+        status: { $in: ACTIVE_REGISTRATION_STATUSES },
+      },
+    },
+  })
+    .select("name status registrations")
+    .exec();
+}
+
 async function getRequestUser(req) {
   try {
     var authHeader = req.headers.authorization || "";
@@ -382,7 +408,9 @@ router.post(
         breed: payload.breed,
         gender: payload.gender,
         birthDate: payload.birthDate,
-        ownerName: payload.ownerName,
+        ownerName: isOwner(req.user)
+          ? getOwnerDisplayName(req.user)
+          : payload.ownerName,
         imageUrl: assets.imageUrl || "",
         imagePublicId: assets.imagePublicId || "",
         licenseImageUrl: assets.licenseImageUrl || "",
@@ -462,7 +490,11 @@ router.patch(
       if (payload.breed !== undefined) horse.breed = payload.breed;
       if (payload.gender !== undefined) horse.gender = payload.gender;
       if (payload.birthDate !== undefined) horse.birthDate = payload.birthDate;
-      if (payload.ownerName !== undefined) horse.ownerName = payload.ownerName;
+      if (isOwner(req.user)) {
+        horse.ownerName = getOwnerDisplayName(req.user);
+      } else if (payload.ownerName !== undefined) {
+        horse.ownerName = payload.ownerName;
+      }
       if (payload.notes !== undefined) horse.notes = payload.notes;
       if (Number.isFinite(payload.wins)) horse.wins = payload.wins;
       if (Number.isFinite(payload.races)) horse.races = payload.races;
@@ -526,6 +558,16 @@ router.delete(
 
       if (!canManageHorse(req, horse)) {
         return res.status(403).json({ error: "Forbidden" });
+      }
+
+      var activeTournament = await findActiveHorseRegistration(horse._id);
+      if (activeTournament) {
+        return res.status(409).json({
+          error:
+            'Không thể xóa ngựa đang có đăng ký trong giải "' +
+            activeTournament.name +
+            '".',
+        });
       }
 
       await Promise.all([
