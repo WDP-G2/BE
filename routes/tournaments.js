@@ -150,9 +150,24 @@ function parseMaybeJson(value, fallback) {
 }
 
 function extractTournamentBanner(req) {
-  if (req.file)
-    return uploadBufferToCloudinary(req.file, "horse-racing/tournaments");
+  if (req.file) {
+    return uploadBufferToCloudinary(
+      req.file,
+      "horse-racing/tournaments",
+    ).then(function (uploaded) {
+      return uploaded ? uploaded.secure_url || uploaded.url || "" : "";
+    });
+  }
   return Promise.resolve(req.body.banner || "");
+}
+
+function isCloudinaryError(error) {
+  var message = String(error && error.message ? error.message : error);
+  return (
+    message.indexOf("Cloudinary is not configured") !== -1 ||
+    message.indexOf("Invalid cloud_name") !== -1 ||
+    message.toLowerCase().indexOf("cloudinary") !== -1
+  );
 }
 
 function mapPrizes(prizes) {
@@ -866,6 +881,14 @@ router.post(
 
       res.status(201).json(mapTournament(tournament));
     } catch (err) {
+      console.error(
+        "Tournament create error:",
+        err && err.stack ? err.stack : err,
+      );
+      if (isCloudinaryError(err)) {
+        var createErrorMessage = String(err && err.message ? err.message : err);
+        return res.status(400).json({ error: createErrorMessage });
+      }
       next(err);
     }
   },
@@ -922,6 +945,14 @@ router.patch(
       await tournament.save();
       res.json(mapTournament(tournament));
     } catch (err) {
+      console.error(
+        "Tournament update error:",
+        err && err.stack ? err.stack : err,
+      );
+      if (isCloudinaryError(err)) {
+        var updateErrorMessage = String(err && err.message ? err.message : err);
+        return res.status(400).json({ error: updateErrorMessage });
+      }
       next(err);
     }
   },
