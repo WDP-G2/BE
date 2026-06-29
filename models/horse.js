@@ -9,6 +9,13 @@ var HorseSchema = new Schema(
     gender: { type: String, default: "" },
     birthDate: { type: Date },
     ownerName: { type: String, default: "" },
+    ownerId: { type: Schema.Types.ObjectId, ref: "User" },
+    approvalStatus: {
+      type: String,
+      enum: ["PENDING", "APPROVED", "REJECTED", "SUSPENDED"],
+      default: "APPROVED",
+      index: true,
+    },
     imageUrl: { type: String, default: "" },
     imagePublicId: { type: String, default: "" },
     licenseImageUrl: { type: String, default: "" },

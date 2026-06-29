@@ -7,6 +7,7 @@ var User = require("../models/user");
 var Tournament = require("../models/tournament");
 var JockeyInvitation = require("../models/jockeyInvitation");
 var { authenticate, requireRole } = require("../middleware/auth");
+var { fail, ok } = require("../utils/httpErrors");
 
 var JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 var JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
@@ -14,14 +15,19 @@ var JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
 function toPublicUser(user) {
   if (!user) return null;
   return {
-    id: user._id,
-    userId: user._id,
+    id: String(user._id),
+    userId: String(user._id),
     username: user.username || user.email?.split("@")[0] || "",
     fullName: user.fullName || user.name || "",
     name: user.name || user.fullName || "",
     email: user.email,
     phone: user.phone || "",
     role: user.role || "USER",
+    active: user.active !== false,
+    location: user.location || "",
+    avatarUrl: user.avatarUrl || "",
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
   };
 }
 
@@ -53,19 +59,15 @@ router.post("/register", async function (req, res, next) {
     var phone = (req.body.phone || "").trim();
 
     if (!email || !password) {
-      return res.status(400).json({ error: "Email and password are required" });
+      return fail(res, 400, "Vui lòng nhập email và mật khẩu");
     }
     if (password.length < 6) {
-      return res
-        .status(400)
-        .json({ error: "Password must be at least 6 characters" });
+      return fail(res, 400, "Mật khẩu phải có ít nhất 6 ký tự");
     }
 
     var existing = await User.findOne({ email }).exec();
     if (existing) {
-      return res
-        .status(409)
-        .json({ error: "User with this email already exists" });
+      return fail(res, 409, "Email này đã được sử dụng");
     }
 
     var hashed = bcrypt.hashSync(password, 8);
@@ -93,17 +95,21 @@ router.post("/login", async function (req, res, next) {
     var password = req.body.password || "";
 
     if (!email || !password) {
-      return res.status(400).json({ error: "Email and password are required" });
+      return fail(res, 400, "Vui lòng nhập email và mật khẩu");
     }
 
     var user = await User.findOne({ email }).exec();
     if (!user) {
-      return res.status(401).json({ error: "Invalid email or password" });
+      return fail(res, 401, "Email hoặc mật khẩu không đúng");
+    }
+
+    if (user.active === false) {
+      return fail(res, 403, "Tài khoản đã bị khóa. Liên hệ quản trị viên để được mở khóa");
     }
 
     var isMatch = bcrypt.compareSync(password, user.password);
     if (!isMatch) {
-      return res.status(401).json({ error: "Invalid email or password" });
+      return fail(res, 401, "Email hoặc mật khẩu không đúng");
     }
 
     var publicUser = toPublicUser(user);
@@ -319,19 +325,19 @@ router.get("/me", async function (req, res, next) {
     var token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
 
     if (!token) {
-      return res.status(401).json({ error: "Unauthorized" });
+      return fail(res, 401, "Vui lòng đăng nhập để tiếp tục");
     }
 
     var payload = jwt.verify(token, JWT_SECRET);
     var user = await User.findById(payload.userId || payload.sub).exec();
 
     if (!user) {
-      return res.status(401).json({ error: "Unauthorized" });
+      return fail(res, 401, "Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại");
     }
 
     res.json(toPublicUser(user));
   } catch (err) {
-    return res.status(401).json({ error: "Unauthorized" });
+    return fail(res, 401, "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại");
   }
 });
 
@@ -340,7 +346,7 @@ router.get("/:id", async function (req, res, next) {
     var user = await User.findById(req.params.id).exec();
 
     if (!user) {
-      return res.status(404).json({ error: "User not found" });
+      return fail(res, 404, "Không tìm thấy người dùng");
     }
 
     res.json(toPublicUser(user));
