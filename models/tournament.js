@@ -51,6 +51,14 @@ var RaceSchema = new Schema(
       },
     },
     results: [ResultSchema],
+    refereeId: { type: Schema.Types.ObjectId, ref: "User" },
+    salaryConfigId: { type: Schema.Types.ObjectId, ref: "RefereeSalaryConfig" },
+    refereePaymentStatus: {
+      type: String,
+      enum: ["NONE", "HELD", "PAID", "RELEASED"],
+      default: "NONE",
+    },
+    refereePaymentAmount: { type: Number, default: 0 },
   },
   { _id: true },
 );
@@ -72,6 +80,17 @@ var RegistrationSchema = new Schema(
       type: String,
       enum: ["Chờ duyệt", "Đã duyệt", "Từ chối", "Đang chạy", "Hoàn thành"],
       default: "Chờ duyệt",
+    },
+    gateNumber: { type: Number },
+    checkInStatus: {
+      type: String,
+      enum: ["PENDING", "CHECKED_IN", "ABSENT"],
+      default: "PENDING",
+    },
+    participantStatus: {
+      type: String,
+      enum: ["REGISTERED", "CHECKED_IN", "RACING", "FINISHED", "DISQUALIFIED", "ABSENT"],
+      default: "REGISTERED",
     },
     notes: { type: String },
     registeredAt: { type: Date, default: Date.now },

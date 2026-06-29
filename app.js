@@ -7,16 +7,28 @@ var logger = require("morgan");
 var indexRouter = require("./routes/index");
 var usersRouter = require("./routes/users");
 var tournamentsRouter = require("./routes/tournaments");
+var tournamentExtrasRouter = require("./routes/tournamentExtras");
 var newsRouter = require("./routes/news");
 var horsesRouter = require("./routes/horses");
 var invitationsRouter = require("./routes/invitations");
-// initialize DB (reads MONGODB_URI)
+var adminRouter = require("./routes/admin");
+var walletsRouter = require("./routes/wallets");
+var notificationsRouter = require("./routes/notifications");
+var spectatorRouter = require("./routes/spectator");
+var refereeRouter = require("./routes/referee");
+var ownerRouter = require("./routes/owner");
+var jockeyRouter = require("./routes/jockey");
+var roleApplicationsRouter = require("./routes/roleApplications");
+var rankingsRouter = require("./routes/rankings");
+var betsRouter = require("./routes/bets");
+var bettingRoutes = require("./routes/betting");
+var jsonErrorHandler = require("./middleware/errorHandler");
+
 require("./db");
 var { seedSampleData } = require("./scripts/seedSampleData");
 
 var app = express();
 
-// view engine setup
 app.set("views", path.join(__dirname, "views"));
 app.set("view engine", "jade");
 
@@ -28,10 +40,23 @@ app.use(express.static(path.join(__dirname, "public")));
 
 app.use("/", indexRouter);
 app.use("/users", usersRouter);
+app.use("/users", bettingRoutes.usersBettingRouter);
 app.use("/tournaments", tournamentsRouter);
+app.use("/tournaments", tournamentExtrasRouter);
 app.use("/news", newsRouter);
 app.use("/horses", horsesRouter);
 app.use("/invitations", invitationsRouter);
+app.use("/admin", adminRouter);
+app.use("/wallets", walletsRouter);
+app.use("/notifications", notificationsRouter);
+app.use("/spectator", spectatorRouter);
+app.use("/referee", refereeRouter);
+app.use("/owner", ownerRouter);
+app.use("/jockey", jockeyRouter);
+app.use("/role-applications", roleApplicationsRouter);
+app.use("/rankings", rankingsRouter);
+app.use("/bets", betsRouter);
+app.use("/races", bettingRoutes.racesRouter);
 
 if (process.env.MONGODB_URI) {
   seedSampleData().catch(function (err) {
@@ -39,20 +64,10 @@ if (process.env.MONGODB_URI) {
   });
 }
 
-// catch 404 and forward to error handler
 app.use(function (req, res, next) {
   next(createError(404));
 });
 
-// error handler
-app.use(function (err, req, res, next) {
-  // set locals, only providing error in development
-  res.locals.message = err.message;
-  res.locals.error = req.app.get("env") === "development" ? err : {};
-
-  // render the error page
-  res.status(err.status || 500);
-  res.render("error");
-});
+app.use(jsonErrorHandler);
 
 module.exports = app;

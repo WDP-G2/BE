@@ -98,8 +98,58 @@ async function ensureUsers() {
 }
 
 async function seedSampleData() {
-  await ensureUsers();
+  var users = await ensureUsers();
+  await ensurePlatformData(users);
   console.log("Sample data seeded");
+}
+
+async function ensurePlatformData(users) {
+  var SystemSettings = require("../models/systemSettings");
+  var RefereeSalaryConfig = require("../models/refereeSalaryConfig");
+  var Province = require("../models/province");
+  var { getUserWallet, getSystemWallet } = require("../services/walletLedger");
+
+  await SystemSettings.findOneAndUpdate(
+    { key: "default" },
+    {
+      $setOnInsert: {
+        key: "default",
+        fees: { entryFeePercent: 5, winningTaxPercent: 10, platformFeePercent: 2 },
+        raceDistances: [1000, 1200, 1400, 1600, 1800, 2000, 2400],
+        bettingEnabled: true,
+      },
+    },
+    { upsert: true, new: true },
+  ).exec();
+
+  await RefereeSalaryConfig.findOneAndUpdate(
+    { name: "Lương trọng tài mặc định" },
+    { $setOnInsert: { name: "Lương trọng tài mặc định", raceType: "Chung", amount: 500000, active: true } },
+    { upsert: true },
+  ).exec();
+
+  await Province.findOneAndUpdate(
+    { name: "TP. Hồ Chí Minh" },
+    {
+      $setOnInsert: {
+        name: "TP. Hồ Chí Minh",
+        code: "HCM",
+        active: true,
+        venues: [{ name: "Trường đua Phú Thọ", address: "Quận 11", active: true }],
+      },
+    },
+    { upsert: true },
+  ).exec();
+
+  await getSystemWallet();
+
+  for (var i = 0; i < users.length; i += 1) {
+    var wallet = await getUserWallet(users[i]._id);
+    if (users[i].role === "SPECTATOR" && Number(wallet.availableBalance || 0) < 1000000) {
+      wallet.availableBalance = 1000000;
+      await wallet.save();
+    }
+  }
 }
 
 module.exports = {

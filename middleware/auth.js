@@ -1,5 +1,6 @@
 var jwt = require("jsonwebtoken");
 var User = require("../models/user");
+var { fail } = require("../utils/httpErrors");
 
 var JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 
@@ -13,14 +14,18 @@ async function authenticate(req, res, next) {
     var token = getToken(req);
 
     if (!token) {
-      return res.status(401).json({ error: "Unauthorized" });
+      return fail(res, 401, "Vui lòng đăng nhập để tiếp tục");
     }
 
     var payload = jwt.verify(token, JWT_SECRET);
     var user = await User.findById(payload.userId || payload.sub).exec();
 
     if (!user) {
-      return res.status(401).json({ error: "Unauthorized" });
+      return fail(res, 401, "Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại");
+    }
+
+    if (user.active === false) {
+      return fail(res, 403, "Tài khoản đã bị khóa. Liên hệ quản trị viên để được mở khóa");
     }
 
     req.user = {
@@ -33,7 +38,7 @@ async function authenticate(req, res, next) {
 
     next();
   } catch (err) {
-    return res.status(401).json({ error: "Unauthorized" });
+    return fail(res, 401, "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại");
   }
 }
 
@@ -42,7 +47,7 @@ function requireRole() {
 
   return function (req, res, next) {
     if (!req.user) {
-      return res.status(401).json({ error: "Unauthorized" });
+      return fail(res, 401, "Vui lòng đăng nhập để tiếp tục");
     }
 
     if (
@@ -52,7 +57,7 @@ function requireRole() {
       return next();
     }
 
-    return res.status(403).json({ error: "Forbidden" });
+    return fail(res, 403, "Bạn không có quyền thực hiện thao tác này");
   };
 }
 

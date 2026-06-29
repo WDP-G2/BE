@@ -8,6 +8,7 @@ var Horse = require("../models/horse");
 var Tournament = require("../models/tournament");
 var User = require("../models/user");
 var { authenticate, requireRole } = require("../middleware/auth");
+var { fail } = require("../utils/httpErrors");
 var JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 
 var CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || "";
@@ -346,7 +347,7 @@ router.get("/", async function (req, res, next) {
     if (mine) {
       req.user = await getRequestUser(req);
       if (!req.user) {
-        return res.status(401).json({ error: "Unauthorized" });
+        return fail(res, 401, "Vui lòng đăng nhập để tiếp tục");
       }
 
       if (!isAdmin(req.user)) {
@@ -361,11 +362,22 @@ router.get("/", async function (req, res, next) {
   }
 });
 
+router.get("/approved", async function (req, res, next) {
+  try {
+    var horses = await Horse.find({ approvalStatus: { $in: ["APPROVED", null] } })
+      .sort({ wins: -1, createdAt: -1 })
+      .exec();
+    res.json(horses.map(mapHorse));
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get("/:identifier", async function (req, res, next) {
   try {
     var horse = await findHorse(req.params.identifier);
     if (!horse) {
-      return res.status(404).json({ error: "Horse not found" });
+      return fail(res, 404, "Không tìm thấy ngựa");
     }
 
     res.json(mapHorse(horse));
@@ -391,7 +403,7 @@ router.post(
 
       if (!name) {
         await cleanupNewAssets(assets);
-        return res.status(400).json({ error: "Horse name is required" });
+        return fail(res, 400, "Vui lòng nhập tên ngựa");
       }
 
       var baseSlug = createSlug(name) || "ngua";
@@ -441,7 +453,7 @@ router.post(
         errorMessage.indexOf("Invalid cloud_name") !== -1 ||
         errorMessage.toLowerCase().indexOf("cloudinary") !== -1
       ) {
-        return res.status(400).json({ error: errorMessage });
+        return fail(res, 400, "Chưa cấu hình Cloudinary để tải ảnh lên");
       }
       next(err);
     }
@@ -461,11 +473,11 @@ router.patch(
     try {
       var horse = await findHorse(req.params.identifier);
       if (!horse) {
-        return res.status(404).json({ error: "Horse not found" });
+        return fail(res, 404, "Không tìm thấy ngựa");
       }
 
       if (!canManageHorse(req, horse)) {
-        return res.status(403).json({ error: "Forbidden" });
+        return fail(res, 403, "Bạn không có quyền thực hiện thao tác này");
       }
 
       var payload = parseMultipartHorse(req);
@@ -538,7 +550,7 @@ router.patch(
         errorMessage.indexOf("Invalid cloud_name") !== -1 ||
         errorMessage.toLowerCase().indexOf("cloudinary") !== -1
       ) {
-        return res.status(400).json({ error: errorMessage });
+        return fail(res, 400, "Chưa cấu hình Cloudinary để tải ảnh lên");
       }
       next(err);
     }
@@ -553,11 +565,11 @@ router.delete(
     try {
       var horse = await findHorse(req.params.identifier);
       if (!horse) {
-        return res.status(404).json({ error: "Horse not found" });
+        return fail(res, 404, "Không tìm thấy ngựa");
       }
 
       if (!canManageHorse(req, horse)) {
-        return res.status(403).json({ error: "Forbidden" });
+        return fail(res, 403, "Bạn không có quyền thực hiện thao tác này");
       }
 
       var activeTournament = await findActiveHorseRegistration(horse._id);

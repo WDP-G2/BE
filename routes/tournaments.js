@@ -8,6 +8,7 @@ var Horse = require("../models/horse");
 var Tournament = require("../models/tournament");
 var JockeyInvitation = require("../models/jockeyInvitation");
 var { authenticate, requireRole } = require("../middleware/auth");
+var { fail } = require("../utils/httpErrors");
 
 var CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || "";
 var CLOUDINARY_API_KEY = process.env.CLOUDINARY_API_KEY || "";
@@ -852,7 +853,7 @@ router.get("/:identifier", async function (req, res, next) {
     ).exec();
 
     if (!tournament) {
-      return res.status(404).json({ error: "Tournament not found" });
+      return fail(res, 404, "Không tìm thấy giải đấu");
     }
 
     res.json(mapTournament(tournament));
@@ -878,16 +879,12 @@ router.post(
       ).trim();
 
       if (!name || !location) {
-        return res
-          .status(400)
-          .json({ error: "Name and location are required" });
+        return fail(res, 400, "Vui lòng nhập tên và địa điểm giải đấu");
       }
 
       var exists = await Tournament.findOne({ slug: slug }).exec();
       if (exists) {
-        return res
-          .status(409)
-          .json({ error: "Tournament slug already exists" });
+        return fail(res, 409, "Mã giải đấu đã tồn tại");
       }
 
       var banner = await extractTournamentBanner(req);
@@ -935,7 +932,7 @@ router.patch(
       ).exec();
 
       if (!tournament) {
-        return res.status(404).json({ error: "Tournament not found" });
+        return fail(res, 404, "Không tìm thấy giải đấu");
       }
 
       var nextName = req.body.name;
@@ -998,7 +995,7 @@ router.patch(
       ).exec();
 
       if (!tournament) {
-        return res.status(404).json({ error: "Tournament not found" });
+        return fail(res, 404, "Không tìm thấy giải đấu");
       }
 
       tournament.type = req.body.type || tournament.type;
@@ -1028,7 +1025,7 @@ router.get("/:identifier/races", async function (req, res, next) {
     ).exec();
 
     if (!tournament) {
-      return res.status(404).json({ error: "Tournament not found" });
+      return fail(res, 404, "Không tìm thấy giải đấu");
     }
 
     res.json((tournament.races || []).map(mapRace));
@@ -1048,18 +1045,16 @@ router.get(
       ).exec();
 
       if (!tournament) {
-        return res.status(404).json({ error: "Tournament not found" });
+        return fail(res, 404, "Không tìm thấy giải đấu");
       }
 
       var race = tournament.races.id(req.params.raceId);
       if (!race) {
-        return res.status(404).json({ error: "Race not found" });
+        return fail(res, 404, "Không tìm thấy cuộc đua");
       }
 
       if (!isRaceOpenForRegistration(tournament, race)) {
-        return res
-          .status(409)
-          .json({ error: "Race is not open for registration" });
+        return fail(res, 409, "Cuộc đua chưa mở đăng ký");
       }
 
       var options = await buildOwnerRaceOptions(tournament, race, req.user.id);
@@ -1081,7 +1076,7 @@ router.post(
       ).exec();
 
       if (!tournament) {
-        return res.status(404).json({ error: "Tournament not found" });
+        return fail(res, 404, "Không tìm thấy giải đấu");
       }
 
       var raceNumber = Number(
@@ -1110,12 +1105,12 @@ router.get("/:identifier/races/:raceId", async function (req, res, next) {
     ).exec();
 
     if (!tournament) {
-      return res.status(404).json({ error: "Tournament not found" });
+      return fail(res, 404, "Không tìm thấy giải đấu");
     }
 
     var race = tournament.races.id(req.params.raceId);
     if (!race) {
-      return res.status(404).json({ error: "Race not found" });
+      return fail(res, 404, "Không tìm thấy cuộc đua");
     }
 
     res.json(mapRace(race));
@@ -1135,12 +1130,12 @@ router.patch(
       ).exec();
 
       if (!tournament) {
-        return res.status(404).json({ error: "Tournament not found" });
+        return fail(res, 404, "Không tìm thấy giải đấu");
       }
 
       var race = tournament.races.id(req.params.raceId);
       if (!race) {
-        return res.status(404).json({ error: "Race not found" });
+        return fail(res, 404, "Không tìm thấy cuộc đua");
       }
 
       if (req.body.name !== undefined) race.name = req.body.name;
@@ -1195,12 +1190,12 @@ router.delete(
       ).exec();
 
       if (!tournament) {
-        return res.status(404).json({ error: "Tournament not found" });
+        return fail(res, 404, "Không tìm thấy giải đấu");
       }
 
       var race = tournament.races.id(req.params.raceId);
       if (!race) {
-        return res.status(404).json({ error: "Race not found" });
+        return fail(res, 404, "Không tìm thấy cuộc đua");
       }
 
       race.deleteOne();
@@ -1219,7 +1214,7 @@ router.get("/:identifier/registrations", async function (req, res, next) {
     ).exec();
 
     if (!tournament) {
-      return res.status(404).json({ error: "Tournament not found" });
+      return fail(res, 404, "Không tìm thấy giải đấu");
     }
 
     res.json(tournament.registrations.map(mapRegistration));
@@ -1239,25 +1234,21 @@ router.post(
       ).exec();
 
       if (!tournament) {
-        return res.status(404).json({ error: "Tournament not found" });
+        return fail(res, 404, "Không tìm thấy giải đấu");
       }
 
       if (!isTournamentOpenForRegistration(tournament)) {
-        return res
-          .status(409)
-          .json({ error: "Tournament is not open for registration" });
+        return fail(res, 409, "Giải đấu chưa mở đăng ký");
       }
 
       var raceId = req.body.raceId || "";
       var race = raceId ? tournament.races.id(raceId) : null;
       if (!race) {
-        return res.status(400).json({ error: "Race is required" });
+        return fail(res, 400, "Vui lòng chọn cuộc đua");
       }
 
       if (!isRaceOpenForRegistration(tournament, race)) {
-        return res
-          .status(409)
-          .json({ error: "Race is not open for registration" });
+        return fail(res, 409, "Cuộc đua chưa mở đăng ký");
       }
 
       var horseId = req.body.horseId || "";
@@ -1272,15 +1263,15 @@ router.post(
       var jockey = jockeyId ? await User.findById(jockeyId).exec() : null;
 
       if (!fullName) {
-        return res.status(400).json({ error: "Registrant name is required" });
+        return fail(res, 400, "Vui lòng nhập tên người đăng ký");
       }
 
       if (!horse || String(horse.createdBy || "") !== String(req.user.id)) {
-        return res.status(404).json({ error: "Horse not found" });
+        return fail(res, 404, "Không tìm thấy ngựa");
       }
 
       if (horse.racingStatus === "cannot-race") {
-        return res.status(400).json({ error: "Horse cannot race" });
+        return fail(res, 400, "Ngựa không đủ điều kiện thi đấu");
       }
 
       var ageRestriction = getHorseAgeRestriction(horse, getRaceStartDate(tournament, race));
@@ -1289,7 +1280,7 @@ router.post(
       }
 
       if (!jockey || jockey.role !== "JOCKEY") {
-        return res.status(404).json({ error: "Jockey not found" });
+        return fail(res, 404, "Không tìm thấy jockey");
       }
 
       var options = await buildOwnerRaceOptions(tournament, race, req.user.id);
@@ -1367,12 +1358,12 @@ router.patch(
       ).exec();
 
       if (!tournament) {
-        return res.status(404).json({ error: "Tournament not found" });
+        return fail(res, 404, "Không tìm thấy giải đấu");
       }
 
       var registration = tournament.registrations.id(req.params.registrationId);
       if (!registration) {
-        return res.status(404).json({ error: "Registration not found" });
+        return fail(res, 404, "Không tìm thấy đăng ký");
       }
 
       var status = String(req.body.status || "").trim();
@@ -1385,7 +1376,7 @@ router.patch(
       ];
 
       if (allowedStatuses.indexOf(status) === -1) {
-        return res.status(400).json({ error: "Invalid registration status" });
+        return fail(res, 400, "Trạng thái đăng ký không hợp lệ");
       }
 
       registration.status = status;
@@ -1408,12 +1399,12 @@ router.post(
       ).exec();
 
       if (!tournament) {
-        return res.status(404).json({ error: "Tournament not found" });
+        return fail(res, 404, "Không tìm thấy giải đấu");
       }
 
       var race = tournament.races.id(req.params.raceId);
       if (!race) {
-        return res.status(404).json({ error: "Race not found" });
+        return fail(res, 404, "Không tìm thấy cuộc đua");
       }
 
       var results = Array.isArray(req.body.results) ? req.body.results : [];
@@ -1446,7 +1437,7 @@ router.get("/:identifier/results", async function (req, res, next) {
     ).exec();
 
     if (!tournament) {
-      return res.status(404).json({ error: "Tournament not found" });
+      return fail(res, 404, "Không tìm thấy giải đấu");
     }
 
     res.json(
