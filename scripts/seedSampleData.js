@@ -66,7 +66,7 @@ async function ensureUsers() {
       email: "spectator1@hr.vn",
       password: passwordHash,
       phone: "0900000006",
-      role: "USER",
+      role: "SPECTATOR",
     },
   ];
 
@@ -76,7 +76,19 @@ async function ensureUsers() {
     var seedUser = seedUsers[i];
     var updated = await User.findOneAndUpdate(
       { email: seedUser.email },
-      { $setOnInsert: seedUser },
+      {
+        $set: {
+          name: seedUser.name,
+          username: seedUser.username,
+          fullName: seedUser.fullName,
+          phone: seedUser.phone,
+          role: seedUser.role,
+        },
+        $setOnInsert: {
+          email: seedUser.email,
+          password: seedUser.password,
+        },
+      },
       { upsert: true, new: true },
     ).exec();
     users.push(updated);
