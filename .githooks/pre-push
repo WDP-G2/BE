@@ -1,2 +1,2 @@
 #!/bin/sh
-node "D:\semester 8\WDP301\Project-WDP\BE\scripts\validate-push.js"
+node "D:\WDP_G2\BE\scripts\validate-push.js"
