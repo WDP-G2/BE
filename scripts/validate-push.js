@@ -21,10 +21,23 @@ try {
 }
 
 if (!range) {
-  try {
-    range = sh("git merge-base HEAD @{u}") + "..HEAD";
-  } catch (err2) {
-    range = sh("git rev-list --max-parents=0 HEAD") + "..HEAD";
+  // New branch (no upstream yet): only check commits not already on origin
+  var base = "";
+  var remoteBaseCandidates = ["origin/HEAD", "origin/main", "origin/master"];
+  for (var ri = 0; ri < remoteBaseCandidates.length; ri++) {
+    try {
+      base = sh("git merge-base HEAD " + remoteBaseCandidates[ri]);
+      break;
+    } catch (e) { /* try next */ }
+  }
+  if (base) {
+    range = base + "..HEAD";
+  } else {
+    try {
+      range = sh("git merge-base HEAD @{u}") + "..HEAD";
+    } catch (err2) {
+      range = sh("git rev-list --max-parents=0 HEAD") + "..HEAD";
+    }
   }
 }
 
