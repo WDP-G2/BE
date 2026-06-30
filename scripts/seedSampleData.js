@@ -114,7 +114,13 @@ async function ensurePlatformData(users) {
     {
       $setOnInsert: {
         key: "default",
-        fees: { entryFeePercent: 5, winningTaxPercent: 10, platformFeePercent: 2 },
+        fees: {
+          defaultRegistrationFee: 5000000,
+          lateCheckInFee: 500000,
+          entryFeePercent: 5,
+          winningTaxPercent: 10,
+          platformFeePercent: 2,
+        },
         raceDistances: [1000, 1200, 1400, 1600, 1800, 2000, 2400],
         bettingEnabled: true,
       },

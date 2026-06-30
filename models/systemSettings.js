@@ -1,16 +1,22 @@
 var mongoose = require("../db");
 var Schema = mongoose.Schema;
+var { DEFAULT_RULES } = require("../utils/systemSettingsMapper");
 
 var SystemSettingsSchema = new Schema(
   {
     key: { type: String, default: "default", unique: true },
     fees: {
+      defaultRegistrationFee: { type: Number, default: 5000000 },
+      lateCheckInFee: { type: Number, default: 500000 },
       entryFeePercent: { type: Number, default: 5 },
       winningTaxPercent: { type: Number, default: 10 },
       platformFeePercent: { type: Number, default: 2 },
     },
-    raceDistances: { type: [Number], default: [1000, 1200, 1400, 1600, 1800, 2000, 2400] },
-    rules: { type: String, default: "" },
+    raceDistances: {
+      type: [Number],
+      default: [1000, 1200, 1400, 1600, 1800, 2000, 2400],
+    },
+    rules: { type: String, default: DEFAULT_RULES },
     security: { type: Schema.Types.Mixed, default: {} },
     branding: { type: Schema.Types.Mixed, default: {} },
     emailTemplates: { type: Schema.Types.Mixed, default: {} },
