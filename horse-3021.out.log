@@ -1,0 +1,4 @@
+Connected to MongoDB
+Sample data seeded
+[0mGET /api/v1/admin/horses [32m200 [0m57.384 ms - 46[0m
+[0mGET /api/v1/horses/approved [32m200 [0m475.198 ms - 3787[0m

@@ -1,0 +1,5 @@
+Connected to MongoDB
+Sample data seeded
+[0mPOST /api/v1/admin/referee-salary-configs [32m200 [0m192.649 ms - 331[0m
+[0mDELETE /api/v1/admin/referee-salary-configs/6a3e2bf74ba70b453b2ee83a [32m200 [0m196.399 ms - 62[0m
+[0mGET /api/v1/admin/audit-logs?referenceType=REFEREE_SALARY_CONFIG&referenceId=6a3e2bf74ba70b453b2ee83a [32m200 [0m38.690 ms - 777[0m

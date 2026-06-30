@@ -1,0 +1,7 @@
+Connected to MongoDB
+Sample data seeded
+[0mGET /api/v1/tournaments [32m200 [0m56.741 ms - 9830[0m
+[0mGET /api/v1/admin/payout-debts [32m200 [0m77.788 ms - 111[0m
+[0mGET /api/v1/tournaments/6a1931a533fef03901994ced/leaderboard [32m200 [0m269.459 ms - 1157[0m
+[0mGET /api/v1/admin/tournaments/6a1931a533fef03901994ced/statistics [32m200 [0m189.964 ms - 609[0m
+[0mGET /api/v1/admin/tournaments/6a1931a533fef03901994ced/payouts [32m200 [0m227.690 ms - 713[0m

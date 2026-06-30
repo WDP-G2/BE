@@ -1,0 +1,30 @@
+Connected to MongoDB
+Sample data seeded
+[0mGET /api/v1/admin/dashboard/revenue?months=3 [32m200 [0m102.133 ms - 257[0m
+[0mGET /api/v1/admin/dashboard/top-horses?limit=3 [32m200 [0m145.197 ms - 240[0m
+[0mGET /api/v1/admin/dashboard/tournament-registrations [32m200 [0m150.744 ms - 750[0m
+[0mGET /api/v1/admin/dashboard/summary [32m200 [0m580.645 ms - 300[0m
+[0mPOST /api/v1/auth/login [33m401 [0m71.291 ms - 55[0m
+[0mPOST /api/v1/auth/login [32m200 [0m79.364 ms - 1035[0m
+[0mGET /api/v1/owner/dashboard [32m200 [0m932.033 ms - 1514[0m
+[0mPOST /api/v1/auth/login [32m200 [0m79.221 ms - 1042[0m
+[0mGET /api/v1/jockey/dashboard [32m200 [0m842.506 ms - 1361[0m
+[0mPOST /api/v1/auth/login [32m200 [0m76.853 ms - 1091[0m
+[0mGET /api/v1/referee/dashboard [32m200 [0m681.681 ms - 1296[0m
+[0mGET /api/v1/admin/dashboard [32m200 [0m1185.925 ms - 4117[0m
+[0mPOST /api/v1/auth/login [32m200 [0m75.623 ms - 1035[0m
+[0mPOST /api/v1/auth/login [32m200 [0m76.286 ms - 1042[0m
+[0mPOST /api/v1/auth/login [32m200 [0m76.299 ms - 1091[0m
+[0mGET /api/v1/admin/races [32m200 [0m63.202 ms - 3237[0m
+[0mGET /api/v1/admin/dashboard/quick-insights?months=3 [32m200 [0m476.861 ms - 608[0m
+[0mGET /api/v1/admin/dashboard/tournament-race-counts?limit=3 [32m200 [0m62.748 ms - 385[0m
+[0mGET /api/v1/admin/dashboard/featured-tournaments?limit=3 [32m200 [0m184.759 ms - 944[0m
+[0mGET /api/v1/owner/races [32m200 [0m180.994 ms - 46[0m
+[0mGET /api/v1/owner/prizes [32m200 [0m177.959 ms - 46[0m
+[0mGET /api/v1/jockey/races [32m200 [0m180.850 ms - 46[0m
+[0mGET /api/v1/jockey/performance [32m200 [0m296.803 ms - 229[0m
+[0mGET /api/v1/jockey/prizes [32m200 [0m176.410 ms - 46[0m
+[0mGET /api/v1/referee/races [32m200 [0m122.626 ms - 46[0m
+[0mGET /api/v1/referee/races/today [32m200 [0m122.316 ms - 46[0m
+[0mGET /api/v1/referee/dashboard/checked-in-count [32m200 [0m181.073 ms - 55[0m
+[0mGET /api/v1/referee/dashboard/pending-check-in-count [32m200 [0m182.362 ms - 55[0m

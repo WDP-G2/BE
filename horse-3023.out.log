@@ -1,0 +1,5 @@
+Connected to MongoDB
+Sample data seeded
+[0mPOST /api/v1/auth/register [32m200 [0m174.434 ms - 1315[0m
+[0mGET /api/v1/tournaments [32m200 [0m75.017 ms - 10274[0m
+[0mGET /api/v1/admin/tournaments/6a1931a533fef03901994ced/eligible-horse-teams [32m200 [0m1633.898 ms - 753[0m

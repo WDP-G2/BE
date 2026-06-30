@@ -1,0 +1,15 @@
+Connected to MongoDB
+Sample data seeded
+[0mPOST /api/v1/auth/login [32m200 [0m86.613 ms - 1042[0m
+[0mPOST /api/v1/auth/login [32m200 [0m66.916 ms - 1035[0m
+[0mGET /api/v1/jockey/profile [32m200 [0m393.047 ms - 598[0m
+[0mGET /api/v1/jockeys/available [32m200 [0m200.493 ms - 600[0m
+[0mGET /api/v1/admin/jockey-profiles [32m200 [0m197.486 ms - 600[0m
+[0mGET /api/v1/owner/jockey-invitations [32m200 [0m1899.314 ms - 6777[0m
+[0mGET /api/v1/jockey/invitations [32m200 [0m739.158 ms - 2296[0m
+[0mGET /api/v1/owner/horse-teams/eligible [32m200 [0m1577.278 ms - 5301[0m
+[0mGET /api/v1/rankings [32m200 [0m194.613 ms - 327[0m
+[0mPOST /api/v1/auth/login [32m200 [0m67.868 ms - 1035[0m
+[0mPOST /api/v1/owner/jockey-invitations [33m400 [0m193.903 ms - 89[0m
+[0mPOST /api/v1/auth/login [32m200 [0m64.989 ms - 1035[0m
+[0mPOST /api/v1/owner/jockey-invitations [33m400 [0m194.887 ms - 89[0m

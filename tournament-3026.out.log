@@ -1,0 +1,11 @@
+Connected to MongoDB
+Sample data seeded
+[0mPOST /api/v1/auth/register [32m200 [0m171.492 ms - 1343[0m
+[0mPOST /api/v1/admin/tournaments [31m500 [0m75.020 ms - 121[0m
+[0mPUT /api/v1/admin/tournaments//races [33m404 [0m3.931 ms - 39[0m
+[0mPUT /api/v1/admin/tournaments//finalize [33m404 [0m1.066 ms - 39[0m
+[0mPOST /api/v1/auth/register [32m200 [0m125.776 ms - 1351[0m
+[0mPOST /api/v1/admin/tournaments [32m200 [0m185.632 ms - 816[0m
+[0mPUT /api/v1/admin/tournaments/6a3e41e70be0f7a2dd807bb1/races [32m200 [0m273.958 ms - 822[0m
+[0mPUT /api/v1/admin/tournaments/6a3e41e70be0f7a2dd807bb1/finalize [33m400 [0m127.640 ms - 74[0m
+[0mGET /api/v1/admin/tournaments/6a3e41e70be0f7a2dd807bb1 [32m200 [0m55.398 ms - 805[0m

@@ -1,0 +1,4 @@
+Connected to MongoDB
+Sample data seeded
+[0mPUT /api/v1/admin/tournaments/6a1d9b5900e76663b4299164/schedule [32m200 [0m281.257 ms - 2368[0m
+[0mGET /api/v1/admin/dashboard/summary [32m200 [0m706.820 ms - 300[0m

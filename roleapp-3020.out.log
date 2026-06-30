@@ -1,0 +1,11 @@
+Connected to MongoDB
+Sample data seeded
+[0mPOST /api/v1/auth/register [32m200 [0m116.118 ms - 1228[0m
+[0mPOST /api/v1/role-applications/spectator [32m200 [0m128.294 ms - 1069[0m
+[0mPOST /api/v1/role-applications/kyc/ocr [32m200 [0m73.745 ms - 258[0m
+[0mPOST /api/v1/role-applications/kyc/6a3e2d54c9ed6154c1569c79/face-match [32m200 [0m217.367 ms - 240[0m
+[0mPUT /api/v1/admin/role-applications/6a3e2d54a763b86887008e7b/approve [32m200 [0m302.269 ms - 1166[0m
+[0mGET /api/v1/auth/me [32m200 [0m34.797 ms - 489[0m
+[0mPOST /api/v1/auth/login [33m401 [0m37.520 ms - 55[0m
+[0mGET /api/v1/admin/role-applications [32m200 [0m129.330 ms - 2175[0m
+[0mGET /api/v1/admin/role-applications/status/pending [32m200 [0m32.437 ms - 46[0m

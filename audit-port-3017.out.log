@@ -1,0 +1,8 @@
+Connected to MongoDB
+Sample data seeded
+[0mPOST /api/v1/auth/login [32m200 [0m88.804 ms - 1091[0m
+[0mPUT /api/v1/admin/system-settings/branding [32m200 [0m252.466 ms - 807[0m
+[0mGET /api/v1/admin/audit-logs [32m200 [0m59.141 ms - 384[0m
+[0mGET /api/v1/admin/audit-logs?referenceType=SYSTEM_SETTINGS&referenceId=branding [32m200 [0m57.063 ms - 384[0m
+[0mGET /api/v1/referee/races [32m200 [0m118.913 ms - 46[0m
+[0mGET /api/v1/referee/races/today [32m200 [0m116.609 ms - 46[0m

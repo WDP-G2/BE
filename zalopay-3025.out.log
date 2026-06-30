@@ -1,0 +1,7 @@
+Connected to MongoDB
+Sample data seeded
+[0mPOST /api/v1/auth/register [32m200 [0m145.374 ms - 1300[0m
+[0mPOST /api/v1/wallets/me/deposit-orders [32m200 [0m113.973 ms - 569[0m
+[0mPOST /api/zalopay/callback [32m200 [0m639.023 ms - 599[0m
+[0mGET /api/v1/wallets/me/deposit-orders/6a3e401da6d7c187ea30ee21 [32m200 [0m104.625 ms - 590[0m
+[0mGET /api/zalopay/return?status=1 [32m200 [0m54.602 ms - 78[0m

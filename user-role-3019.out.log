@@ -1,0 +1,4 @@
+Connected to MongoDB
+Sample data seeded
+[0mPUT /api/v1/admin/users/6a16a979f84bdd832ca70253/role [32m200 [0m179.134 ms - 419[0m
+[0mGET /api/v1/admin/audit-logs?referenceType=USER&referenceId=6a16a979f84bdd832ca70253 [32m200 [0m51.718 ms - 324[0m

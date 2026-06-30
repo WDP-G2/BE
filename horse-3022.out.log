@@ -1,0 +1,9 @@
+Connected to MongoDB
+Sample data seeded
+[0mPOST /api/v1/races/000000000000000000000000/registrations [33m401 [0m20.309 ms - 42[0m
+[0mGET /api/v1/admin/horses?status=APPROVED [32m200 [0m71.092 ms - 46[0m
+[0mGET /api/v1/horses/approved [32m200 [0m357.816 ms - 3792[0m
+[0mPOST /api/v1/auth/register [32m200 [0m130.752 ms - 1260[0m
+[0mPOST /api/v1/owner/horses [32m200 [0m158.499 ms - 636[0m
+[0mPOST /api/v1/auth/register [32m200 [0m120.702 ms - 1260[0m
+[0mPUT /api/v1/admin/horses/6a3e3e38da4b09b83b0769f9/approve [32m200 [0m153.582 ms - 679[0m
