@@ -10,14 +10,74 @@ var {
   mapProvince,
   mapVenue,
   readActiveFlag,
+  DEFAULT_RULES,
 } = require("../../utils/systemSettingsMapper");
+
+var DEFAULT_FEES = {
+  defaultRegistrationFee: 5000000,
+  lateCheckInFee: 500000,
+  entryFeePercent: 5,
+  winningTaxPercent: 10,
+  platformFeePercent: 2,
+};
+
+var DEFAULT_DISTANCES = [1000, 1200, 1400, 1600, 1800, 2000, 2400];
 
 router.use(authenticate, requireRole("ADMIN"));
 
+async function ensureSettingsShape(doc) {
+  var changed = false;
+
+  if (!doc.fees || typeof doc.fees !== "object") {
+    doc.fees = {};
+    changed = true;
+  }
+
+  Object.keys(DEFAULT_FEES).forEach(function (key) {
+    if (doc.fees[key] == null) {
+      doc.fees[key] = DEFAULT_FEES[key];
+      changed = true;
+    }
+  });
+
+  if (!Array.isArray(doc.raceDistances) || !doc.raceDistances.length) {
+    doc.raceDistances = DEFAULT_DISTANCES.slice();
+    changed = true;
+  }
+
+  if (!String(doc.rules || "").trim()) {
+    doc.rules = DEFAULT_RULES;
+    changed = true;
+  }
+
+  if (doc.bettingEnabled == null) {
+    doc.bettingEnabled = true;
+    changed = true;
+  }
+
+  if (changed) {
+    await doc.save();
+  }
+
+  return doc;
+}
+
 async function getSettingsDoc() {
-  var doc = await SystemSettings.findOne({ key: "default" }).exec();
-  if (doc) return doc;
-  return SystemSettings.create({ key: "default" });
+  var doc = await SystemSettings.findOneAndUpdate(
+    { key: "default" },
+    {
+      $setOnInsert: {
+        key: "default",
+        fees: DEFAULT_FEES,
+        raceDistances: DEFAULT_DISTANCES,
+        rules: DEFAULT_RULES,
+        bettingEnabled: true,
+      },
+    },
+    { upsert: true, new: true },
+  ).exec();
+
+  return ensureSettingsShape(doc);
 }
 
 router.get(
@@ -33,10 +93,16 @@ router.put(
   asyncHandler(async function (req, res) {
     var doc = await getSettingsDoc();
     var body = req.body || {};
-    doc.fees = Object.assign({}, doc.fees || {}, {
-      defaultRegistrationFee: Number(body.defaultRegistrationFee ?? doc.fees?.defaultRegistrationFee ?? 0),
-      lateCheckInFee: Number(body.lateCheckInFee ?? doc.fees?.lateCheckInFee ?? 0),
-    });
+    if (!doc.fees || typeof doc.fees !== "object") {
+      doc.fees = {};
+    }
+    doc.fees.defaultRegistrationFee = Number(
+      body.defaultRegistrationFee ?? doc.fees.defaultRegistrationFee ?? DEFAULT_FEES.defaultRegistrationFee,
+    );
+    doc.fees.lateCheckInFee = Number(
+      body.lateCheckInFee ?? doc.fees.lateCheckInFee ?? DEFAULT_FEES.lateCheckInFee,
+    );
+    doc.markModified("fees");
     await doc.save();
     res.json(apiSuccess(mapSettingsDoc(doc), "Cập nhật lệ phí thành công"));
   }),
@@ -80,6 +146,7 @@ router.put(
     }
 
     doc.raceDistances = normalized;
+    doc.markModified("raceDistances");
     await doc.save();
     res.json(apiSuccess(mapSettingsDoc(doc), "Cập nhật cự ly thành công"));
   }),
