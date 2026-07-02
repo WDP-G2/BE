@@ -1,24 +1,99 @@
 var express = require("express");
 var router = express.Router();
 var mongoose = require("mongoose");
-var crypto = require("crypto");
 var multer = require("multer");
 var User = require("../models/user");
 var Horse = require("../models/horse");
 var Tournament = require("../models/tournament");
+var Province = require("../models/province");
 var JockeyInvitation = require("../models/jockeyInvitation");
 var { authenticate, requireRole } = require("../middleware/auth");
 var { fail } = require("../utils/httpErrors");
+var {
+  uploadBufferToCloudinary,
+  isCloudinaryError,
+} = require("../utils/cloudinaryUpload");
+var { mapVenue } = require("../utils/systemSettingsMapper");
 
-var CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || "";
-var CLOUDINARY_API_KEY = process.env.CLOUDINARY_API_KEY || "";
-var CLOUDINARY_API_SECRET = process.env.CLOUDINARY_API_SECRET || "";
 var MIN_RACE_AGE_MONTHS = 24;
 
-function requireCloudinaryConfig() {
-  if (!CLOUDINARY_CLOUD_NAME || !CLOUDINARY_API_KEY || !CLOUDINARY_API_SECRET) {
-    throw new Error("Cloudinary is not configured");
-  }
+var TOURNAMENT_STATUS_LABELS = {
+  DRAFT: "Nháp",
+  PUBLISHED: "Đã công bố",
+  OPEN_REGISTRATION: "Đang mở đăng ký",
+  REGISTRATION_CLOSED: "Đã đóng đăng ký",
+  SCHEDULED: "Đã lên lịch",
+  ONGOING: "Đang diễn ra",
+  COMPLETED: "Đã kết thúc",
+  CANCELLED: "Đã hủy",
+};
+
+var TOURNAMENT_STATUS_CODES = Object.keys(TOURNAMENT_STATUS_LABELS).reduce(
+  function (result, code) {
+    result[TOURNAMENT_STATUS_LABELS[code]] = code;
+    return result;
+  },
+  {},
+);
+
+var RACE_STATUS_LABELS = {
+  DRAFT: "Nháp",
+  SCHEDULED: "Sắp diễn ra",
+  ONGOING: "Đang diễn ra",
+  RESULT_CONFIRMED: "Hoàn thành",
+  CANCELLED: "Đã hủy",
+};
+
+var RACE_STATUS_CODES = {
+  "Nháp": "DRAFT",
+  "Sắp chạy": "SCHEDULED",
+  "Sắp diễn ra": "SCHEDULED",
+  "Đã lên lịch": "SCHEDULED",
+  "Đang chạy": "ONGOING",
+  "Đang diễn ra": "ONGOING",
+  "Hoàn thành": "RESULT_CONFIRMED",
+  "Đã chốt kết quả": "RESULT_CONFIRMED",
+  "Đã hủy": "CANCELLED",
+};
+
+function normalizeStatusKey(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase();
+}
+
+function toTournamentStatusLabel(value, fallback) {
+  var trimmed = String(value || "").trim();
+  if (!trimmed) return fallback || TOURNAMENT_STATUS_LABELS.DRAFT;
+
+  var code = normalizeStatusKey(trimmed);
+  return TOURNAMENT_STATUS_LABELS[code] || trimmed;
+}
+
+function toTournamentStatusCode(value) {
+  var trimmed = String(value || "").trim();
+  if (!trimmed) return "DRAFT";
+
+  var code = normalizeStatusKey(trimmed);
+  return TOURNAMENT_STATUS_LABELS[code]
+    ? code
+    : TOURNAMENT_STATUS_CODES[trimmed] || code;
+}
+
+function toRaceStatusLabel(value, fallback) {
+  var trimmed = String(value || "").trim();
+  if (!trimmed) return fallback || RACE_STATUS_LABELS.DRAFT;
+
+  var code = normalizeStatusKey(trimmed);
+  return RACE_STATUS_LABELS[code] || trimmed;
+}
+
+function toRaceStatusCode(value) {
+  var trimmed = String(value || "").trim();
+  if (!trimmed) return "DRAFT";
+
+  var code = normalizeStatusKey(trimmed);
+  return RACE_STATUS_LABELS[code] ? code : RACE_STATUS_CODES[trimmed] || code;
 }
 
 var storage = multer.memoryStorage();
@@ -37,74 +112,6 @@ var upload = multer({
   limits: { fileSize: 8 * 1024 * 1024 },
 });
 
-function signCloudinaryParams(params) {
-  var payload = Object.keys(params)
-    .sort()
-    .map(function (key) {
-      return key + "=" + params[key];
-    })
-    .join("&");
-
-  return crypto
-    .createHash("sha1")
-    .update(payload + CLOUDINARY_API_SECRET)
-    .digest("hex");
-}
-
-function uploadBufferToCloudinary(file, folder) {
-  return new Promise(function (resolve, reject) {
-    if (!file || !file.buffer) {
-      return resolve(null);
-    }
-
-    try {
-      requireCloudinaryConfig();
-    } catch (error) {
-      return reject(error);
-    }
-
-    var timestamp = Math.floor(Date.now() / 1000).toString();
-    var params = {
-      folder: folder,
-      timestamp: timestamp,
-    };
-    var signature = signCloudinaryParams(params);
-    var formData = new FormData();
-
-    formData.append(
-      "file",
-      new Blob([file.buffer], {
-        type: file.mimetype || "application/octet-stream",
-      }),
-      file.originalname || "upload.jpg",
-    );
-    formData.append("api_key", CLOUDINARY_API_KEY);
-    formData.append("timestamp", timestamp);
-    formData.append("folder", folder);
-    formData.append("signature", signature);
-
-    fetch(
-      "https://api.cloudinary.com/v1_1/" +
-        encodeURIComponent(CLOUDINARY_CLOUD_NAME) +
-        "/image/upload",
-      {
-        method: "POST",
-        body: formData,
-      },
-    )
-      .then(function (response) {
-        return response.text().then(function (text) {
-          if (!response.ok) {
-            throw new Error(text || "Cloudinary upload failed");
-          }
-          return text ? JSON.parse(text) : {};
-        });
-      })
-      .then(resolve)
-      .catch(reject);
-  });
-}
-
 function createSlug(value) {
   return String(value || "")
     .toLowerCase()
@@ -117,7 +124,16 @@ function createSlug(value) {
 
 function toDate(value) {
   if (!value) return undefined;
-  var date = new Date(value);
+  var str = String(value);
+  // Date-time strings without a timezone designator (e.g. "2026-07-08T08:00:00")
+  // are parsed using the server's local timezone by the JS Date constructor,
+  // which silently shifts the wall-clock time the admin entered whenever the
+  // server isn't running in UTC. Treat them as UTC instead so the value the
+  // admin typed round-trips unchanged regardless of server timezone.
+  if (/T\d{2}:\d{2}/.test(str) && !/[Zz]$|[+-]\d{2}:\d{2}$/.test(str)) {
+    str += "Z";
+  }
+  var date = new Date(str);
   return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
@@ -153,32 +169,61 @@ function parseMaybeJson(value, fallback) {
 
 function extractTournamentBanner(req) {
   if (req.file) {
-    return uploadBufferToCloudinary(
-      req.file,
-      "horse-racing/tournaments",
-    ).then(function (uploaded) {
-      return uploaded ? uploaded.secure_url || uploaded.url || "" : "";
-    });
+    return uploadBufferToCloudinary(req.file, "horse-racing/tournaments").then(
+      function (uploaded) {
+        return uploaded ? uploaded.secure_url || uploaded.url || "" : "";
+      },
+    );
   }
-  return Promise.resolve(req.body.banner || "");
+  return Promise.resolve(req.body.banner || req.body.bannerUrl || "");
 }
 
-function isCloudinaryError(error) {
-  var message = String(error && error.message ? error.message : error);
-  return (
-    message.indexOf("Cloudinary is not configured") !== -1 ||
-    message.indexOf("Invalid cloud_name") !== -1 ||
-    message.toLowerCase().indexOf("cloudinary") !== -1
-  );
-}
+var LEGACY_PRIZE_RANKS = {
+  first: { rank: 1, itemName: "Giải nhất" },
+  second: { rank: 2, itemName: "Giải nhì" },
+  third: { rank: 3, itemName: "Giải ba" },
+};
 
 function mapPrizes(prizes) {
-  prizes = prizes || {};
-  return {
-    first: prizes.first || 0,
-    second: prizes.second || 0,
-    third: prizes.third || 0,
-  };
+  if (Array.isArray(prizes)) {
+    return prizes.map(function (prize, index) {
+      return {
+        id: prize.id || "prize-" + (prize.rank || index + 1) + "-" + index,
+        rank: Number(prize.rank || index + 1),
+        itemName: prize.itemName || "Giải " + (prize.rank || index + 1),
+        amount: Number(prize.amount || 0),
+      };
+    });
+  }
+
+  if (prizes && typeof prizes === "object") {
+    return Object.keys(LEGACY_PRIZE_RANKS)
+      .filter(function (key) {
+        return Number(prizes[key]) > 0;
+      })
+      .map(function (key) {
+        var meta = LEGACY_PRIZE_RANKS[key];
+        return {
+          id: "prize-" + meta.rank,
+          rank: meta.rank,
+          itemName: meta.itemName,
+          amount: Number(prizes[key]),
+        };
+      });
+  }
+
+  return [];
+}
+
+function buildPrizesFromBody(rawPrizes) {
+  if (!Array.isArray(rawPrizes)) return [];
+  return rawPrizes.map(function (prize, index) {
+    return {
+      rank: toNumber(prize.rank, index + 1),
+      itemName: prize.itemName || prize.name || "Giải " + toNumber(prize.rank, index + 1),
+      amount: toNumber(prize.amount, 0),
+    };
+  });
 }
 
 function mapResult(result) {
@@ -195,23 +240,35 @@ function mapResult(result) {
 }
 
 function mapRace(race) {
+  var statusCode = toRaceStatusCode(race.status);
   return {
     id: String(race._id),
     raceNumber: race.raceNumber,
     name: race.name,
     distance: race.distance,
     scheduledAt: race.scheduledAt || null,
-    status: race.status,
+    scheduledStartAt: race.scheduledAt || null,
+    scheduledEndAt: race.scheduledEndAt || null,
+    status: statusCode,
+    statusCode: statusCode,
+    statusLabel: race.status || RACE_STATUS_LABELS[statusCode] || "",
     description: race.description || "",
+    note: race.description || "",
     track: race.track || "",
+    venueId: race.venueId || "",
+    venueName: race.venueName || "",
+    venueAddress: race.venueAddress || "",
     surface: race.surface || "Cỏ",
     category: race.category || "Open",
     minHorses: race.minHorses || 0,
     maxHorses: race.maxHorses || 0,
+    minParticipants: race.minHorses || 0,
+    maxParticipants: race.maxHorses || 0,
     entryFee: race.entryFee || 0,
     deposit: race.deposit || 0,
     regDeadline: race.regDeadline || null,
     checkIn: race.checkIn || "",
+    refereeId: race.refereeId ? String(race.refereeId) : null,
     prizes: mapPrizes(race.prizes),
     results: (race.results || []).map(mapResult),
   };
@@ -589,6 +646,8 @@ async function buildOwnerRaceOptions(tournament, race, ownerId) {
 }
 
 function mapTournament(tournament) {
+  var config = tournament.config || {};
+  var statusCode = toTournamentStatusCode(tournament.status);
   return {
     id: String(tournament._id),
     slug: tournament.slug,
@@ -597,11 +656,51 @@ function mapTournament(tournament) {
     location: tournament.location,
     banner: tournament.banner || "",
     type: tournament.type,
-    status: tournament.status,
+    bannerUrl: tournament.banner || "",
+    status: statusCode,
+    statusCode: statusCode,
+    statusLabel: tournament.status,
     startDate: tournament.startDate || null,
     endDate: tournament.endDate || null,
+    startAt: tournament.startDate || null,
+    endAt: tournament.endDate || null,
+    provinceId: tournament.provinceId ? String(tournament.provinceId) : null,
+    registrationOpenAt: tournament.registrationOpenAt || null,
+    checkInDeadlineAt:
+      tournament.checkInDeadlineAt || config.deadlineAt || null,
+    minTeams: Number(tournament.minTeams ?? 1),
+    maxTeams: Number(tournament.maxTeams ?? 0),
+    minHorsesPerOwner: Number(tournament.minHorsesPerOwner ?? 4),
+    maxHorsesPerOwner: Number(tournament.maxHorsesPerOwner ?? 10),
+    jockeyChallengeEnabled: Boolean(tournament.jockeyChallengeEnabled),
+    jockeyChallengeFirstPoints: Number(
+      tournament.jockeyChallengeFirstPoints ?? 3,
+    ),
+    jockeyChallengeSecondPoints: Number(
+      tournament.jockeyChallengeSecondPoints ?? 2,
+    ),
+    jockeyChallengeThirdPoints: Number(
+      tournament.jockeyChallengeThirdPoints ?? 1,
+    ),
+    jockeyChallengePrizes: (tournament.jockeyChallengePrizes || []).map(
+      function (prize) {
+        return {
+          rank: Number(prize.rank || 0),
+          amount: Number(prize.amount || 0),
+          note: prize.note || "",
+        };
+      },
+    ),
     rules: tournament.rules || "",
-    config: tournament.config || {},
+    config: config,
+    deadlineAt: config.deadlineAt || tournament.startDate || null,
+    registrationDeadline: config.deadlineAt || tournament.startDate || null,
+    registrationCloseAt: config.deadlineAt || tournament.startDate || null,
+    registrationFee: Number(config.entryFee || 0),
+    depositFee: Number(config.depositFee || 0),
+    maxRegistrations: Number(config.maxRegistrations || 0),
+    requireJockey: Boolean(config.requireJockey !== false),
+    requireHorseOwner: Boolean(config.requireHorseOwner !== false),
     races: (tournament.races || []).map(mapRace),
     registrations: (tournament.registrations || []).map(mapRegistration),
     raceCount: (tournament.races || []).length,
