@@ -8,118 +8,124 @@ var mongoose = require("mongoose");
 var { authenticate, requireRole } = require("../middleware/auth");
 var asyncHandler = require("../utils/asyncHandler");
 var { apiSuccess, apiError } = require("../utils/apiResponse");
+var { mapInvitation } = require("../utils/jockeyInvitationMapper");
+var {
+  buildJockeyPerformancePayload,
+  buildProfileResponse,
+} = require("../utils/jockeyProfile");
 
-var upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 8 * 1024 * 1024 } });
+var upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 },
+});
 
 router.use(authenticate, requireRole("JOCKEY"));
 
-// Status mapping BE Vietnamese → FE English
-var STATUS_TO_CODE = {
-  "Chờ xử lý": "PENDING",
-  "Đã chấp nhận": "ACCEPTED",
-  "Đã từ chối": "REJECTED",
-  "Đã hủy": "CANCELLED",
-};
+function normalizeRaceStatus(registrationStatus, raceStatus) {
+  var reg = String(registrationStatus || "")
+    .trim()
+    .toLowerCase();
+  var race = String(raceStatus || "")
+    .trim()
+    .toLowerCase();
 
-function mapInvitation(doc) {
-  var obj = doc.toObject ? doc.toObject() : doc;
-  return {
-    id: String(obj._id || ""),
-    ownerId: String(obj.ownerId || ""),
-    ownerUsername: obj.ownerName || "",
-    jockeyId: String(obj.jockeyId || ""),
-    jockeyUsername: obj.jockeyName || "",
-    horseId: String(obj.horseId || ""),
-    horseName: obj.horseName || "",
-    raceId: obj.raceId ? String(obj.raceId) : null,
-    raceName: obj.raceLabel || "",
-    raceScheduledStartAt: obj.raceDate && obj.raceTime
-      ? obj.raceDate + "T" + obj.raceTime + ":00.000Z"
-      : obj.raceDate || null,
-    raceScheduledEndAt: null,
-    venueId: null,
-    venueName: obj.location || "",
-    venueAddress: obj.location || "",
-    tournamentId: obj.tournamentId ? String(obj.tournamentId) : null,
-    tournamentName: obj.tournamentName || "",
-    status: STATUS_TO_CODE[obj.status] || "PENDING",
-    remunerationAmount: obj.reward || 0,
-    taxAmount: 0,
-    jockeyPayoutAmount: obj.reward || 0,
-    message: obj.message || "",
-    responseNote: obj.responseNote || "",
-    createdAt: obj.createdAt || null,
-    updatedAt: obj.updatedAt || null,
-    respondedAt: obj.respondedAt || null,
-    cancelledAt: obj.cancelledAt || null,
-  };
-}
+  if (
+    reg === "từ chối" ||
+    reg === "rejected" ||
+    reg === "cancelled" ||
+    race === "cancelled" ||
+    race === "đã hủy"
+  ) {
+    return "CANCELLED";
+  }
 
-function buildProfileResponse(app, user) {
-  var pd = (app && app.profileData) || {};
-  return {
-    id: app ? String(app._id) : null,
-    userId: user.id,
-    fullName: (app && app.fullName) || user.fullName || user.username || "",
-    username: user.username || "",
-    email: user.email || "",
-    licenseNumber: pd.licenseNumber || "",
-    experienceYears: Number(pd.experienceYears || 0),
-    heightCm: Number(pd.heightCm || 0),
-    weightKg: Number(pd.weightKg || 0),
-    hirePrice: Number(pd.hirePrice || 0),
-    bio: pd.bio || "",
-    awards: pd.awards || "",
-    achievements: pd.achievements || "",
-    specialties: pd.specialties || "",
-    avatarUrl: pd.avatarUrl || "",
-    licenseDocumentUrl: pd.licenseDocumentUrl || "",
-    status: app ? (app.status || "APPROVED") : "NO_APPROVED_PROFILE",
-    performance: {
-      totalRaces: 0,
-      wins: 0,
-      winRate: 0,
-    },
-    raceHistory: [],
-  };
+  if (
+    reg === "đang chạy" ||
+    reg === "racing" ||
+    reg === "đang diễn ra" ||
+    race === "đang chạy" ||
+    race === "đang diễn ra" ||
+    race === "ongoing"
+  ) {
+    return "ONGOING";
+  }
+
+  if (
+    reg === "hoàn thành" ||
+    reg === "completed" ||
+    reg === "đã kết thúc" ||
+    race === "hoàn thành" ||
+    race === "completed" ||
+    race === "đã kết thúc"
+  ) {
+    return "COMPLETED";
+  }
+
+  return "SCHEDULED";
 }
 
 router.get(
   "/dashboard",
   asyncHandler(async function (req, res) {
-    var jockeyId = new mongoose.Types.ObjectId(req.user.id);
-    var regs = await Tournament.aggregate([
-      { $unwind: "$registrations" },
-      { $match: { "registrations.jockeyId": jockeyId } },
-      { $count: "total" },
-    ]);
-    res.json(apiSuccess({
-      role: "JOCKEY",
-      raceCount: regs[0]?.total || 0,
-    }));
+    var performancePayload = await buildJockeyPerformancePayload(req.user.id);
+    res.json(
+      apiSuccess({
+        role: "JOCKEY",
+        raceCount: performancePayload.raceCount,
+        wins: performancePayload.wins,
+        winRate:
+          performancePayload.raceCount > 0
+            ? Number(
+                (
+                  (performancePayload.wins / performancePayload.raceCount) *
+                  100
+                ).toFixed(1),
+              )
+            : 0,
+        totalJockeyPayout: performancePayload.totalJockeyPayout,
+        totalPrizePayout: performancePayload.totalPrizePayout,
+      }),
+    );
   }),
 );
 
 router.get(
   "/races",
   asyncHandler(async function (req, res) {
-    var tournaments = await Tournament.find({ "registrations.jockeyId": req.user.id }).exec();
+    var tournaments = await Tournament.find({
+      "registrations.jockeyId": req.user.id,
+    }).exec();
     var rows = [];
+
     tournaments.forEach(function (t) {
       (t.registrations || []).forEach(function (reg) {
-        if (String(reg.jockeyId) === String(req.user.id)) {
-          var race = (t.races || []).find(function (r) { return String(r._id) === String(reg.raceId); });
-          rows.push({
-            id: race ? String(race._id) : String(reg.raceId),
-            tournamentId: String(t._id),
-            tournamentName: t.name,
-            raceName: race?.name || reg.horseName,
-            status: reg.status,
-            scheduledAt: race?.scheduledAt,
+        if (String(reg.jockeyId) !== String(req.user.id)) return;
+
+        var race = null;
+        if (reg.raceId) {
+          race = (t.races || []).find(function (item) {
+            return String(item._id) === String(reg.raceId);
           });
         }
+        if (!race && (t.races || []).length) {
+          race = t.races[0];
+        }
+
+        rows.push({
+          id: race ? String(race._id) : String(reg.raceId || ""),
+          tournamentId: String(t._id),
+          tournamentName: t.name || "",
+          name: race?.name || reg.horseName || "",
+          status: normalizeRaceStatus(reg.status, race?.status),
+          scheduledStartAt: race?.scheduledAt || null,
+          venueName: t.name || "",
+          venueAddress: t.location || "",
+          horseName: reg.horseName || "",
+          ownerName: reg.ownerName || "",
+        });
       });
     });
+
     res.json(apiSuccess(rows));
   }),
 );
@@ -127,15 +133,8 @@ router.get(
 router.get(
   "/performance",
   asyncHandler(async function (req, res) {
-    res.json(apiSuccess({
-      firstPlaces: 0,
-      raceCount: 0,
-      wins: 0,
-      races: 0,
-      totalJockeyPayout: 0,
-      totalPrizePayout: 0,
-      recentRaces: [],
-    }));
+    var performancePayload = await buildJockeyPerformancePayload(req.user.id);
+    res.json(apiSuccess(performancePayload));
   }),
 );
 
@@ -153,9 +152,14 @@ router.get(
       userId: req.user.id,
       role: "JOCKEY",
       status: "APPROVED",
-    }).sort({ createdAt: -1 }).exec();
+    })
+      .sort({ createdAt: -1 })
+      .exec();
 
-    res.json(apiSuccess(buildProfileResponse(app, req.user)));
+    var performancePayload = await buildJockeyPerformancePayload(req.user.id);
+    res.json(
+      apiSuccess(buildProfileResponse(app, req.user, performancePayload)),
+    );
   }),
 );
 
@@ -163,18 +167,35 @@ router.put(
   "/profile",
   upload.none(),
   asyncHandler(async function (req, res) {
-    var { bio, licenseNumber, experienceYears, specialties, heightCm, weightKg, hirePrice, awards, achievements } = req.body;
+    var {
+      bio,
+      licenseNumber,
+      experienceYears,
+      specialties,
+      heightCm,
+      weightKg,
+      hirePrice,
+      awards,
+      achievements,
+    } = req.body;
 
     var setFields = {};
     if (bio !== undefined) setFields["profileData.bio"] = bio;
-    if (licenseNumber !== undefined) setFields["profileData.licenseNumber"] = licenseNumber;
-    if (experienceYears !== undefined) setFields["profileData.experienceYears"] = Number(experienceYears);
-    if (specialties !== undefined) setFields["profileData.specialties"] = specialties;
-    if (heightCm !== undefined) setFields["profileData.heightCm"] = Number(heightCm);
-    if (weightKg !== undefined) setFields["profileData.weightKg"] = Number(weightKg);
-    if (hirePrice !== undefined) setFields["profileData.hirePrice"] = Number(hirePrice);
+    if (licenseNumber !== undefined)
+      setFields["profileData.licenseNumber"] = licenseNumber;
+    if (experienceYears !== undefined)
+      setFields["profileData.experienceYears"] = Number(experienceYears);
+    if (specialties !== undefined)
+      setFields["profileData.specialties"] = specialties;
+    if (heightCm !== undefined)
+      setFields["profileData.heightCm"] = Number(heightCm);
+    if (weightKg !== undefined)
+      setFields["profileData.weightKg"] = Number(weightKg);
+    if (hirePrice !== undefined)
+      setFields["profileData.hirePrice"] = Number(hirePrice);
     if (awards !== undefined) setFields["profileData.awards"] = awards;
-    if (achievements !== undefined) setFields["profileData.achievements"] = achievements;
+    if (achievements !== undefined)
+      setFields["profileData.achievements"] = achievements;
 
     var app = await RoleApplication.findOneAndUpdate(
       { userId: req.user.id, role: "JOCKEY", status: "APPROVED" },
@@ -203,14 +224,19 @@ router.put(
       });
     }
 
-    res.json(apiSuccess(buildProfileResponse(app, req.user)));
+    var performancePayload = await buildJockeyPerformancePayload(req.user.id);
+    res.json(
+      apiSuccess(buildProfileResponse(app, req.user, performancePayload)),
+    );
   }),
 );
 
 router.get(
   "/invitations",
   asyncHandler(async function (req, res) {
-    var rows = await JockeyInvitation.find({ jockeyId: req.user.id }).sort({ createdAt: -1 }).exec();
+    var rows = await JockeyInvitation.find({ jockeyId: req.user.id })
+      .sort({ createdAt: -1 })
+      .exec();
     res.json(apiSuccess(rows.map(mapInvitation)));
   }),
 );
