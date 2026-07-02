@@ -14,24 +14,27 @@ var ResultSchema = new Schema(
   { _id: true },
 );
 
-var PrizeSchema = new Schema(
-  {
-    first: { type: Number, default: 0 },
-    second: { type: Number, default: 0 },
-    third: { type: Number, default: 0 },
-  },
-  { _id: false },
-);
-
 var RaceSchema = new Schema(
   {
     raceNumber: { type: Number, required: true },
     name: { type: String, required: true },
-    distance: { type: Number, required: true },
+    distance: { type: String, required: true },
     scheduledAt: { type: Date },
+    scheduledEndAt: { type: Date },
+    venueId: { type: String, default: "" },
+    venueName: { type: String, default: "" },
+    venueAddress: { type: String, default: "" },
     status: {
       type: String,
-      enum: ["Nháp", "Sắp chạy", "Đang chạy", "Hoàn thành"],
+      enum: [
+        "Nháp",
+        "Sắp chạy",
+        "Sắp diễn ra",
+        "Đang chạy",
+        "Đang diễn ra",
+        "Hoàn thành",
+        "Đã hủy",
+      ],
       default: "Nháp",
     },
     description: { type: String },
@@ -44,12 +47,7 @@ var RaceSchema = new Schema(
     deposit: { type: Number, default: 0 },
     regDeadline: { type: Date },
     checkIn: { type: String, default: "" },
-    prizes: {
-      type: PrizeSchema,
-      default: function () {
-        return {};
-      },
-    },
+    prizes: { type: Schema.Types.Mixed, default: [] },
     results: [ResultSchema],
     refereeId: { type: Schema.Types.ObjectId, ref: "User" },
     salaryConfigId: { type: Schema.Types.ObjectId, ref: "RefereeSalaryConfig" },
