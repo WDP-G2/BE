@@ -318,6 +318,58 @@ router.get(
   },
 );
 
+/* GET /users/jockeys - public jockey accounts */
+router.get("/jockeys", async function (req, res, next) {
+  try {
+    var jockeys = await User.find({ role: "JOCKEY", active: { $ne: false } })
+      .sort({ fullName: 1, username: 1 })
+      .exec();
+    ok(res, jockeys.map(toPublicUser));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/* GET /users/me/profile - current user profile */
+router.get("/me/profile", authenticate, async function (req, res, next) {
+  try {
+    var user = await User.findById(req.user.id).exec();
+    if (!user) {
+      return fail(res, 401, "Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại");
+    }
+    ok(res, toPublicUser(user));
+  } catch (err) {
+    next(err);
+  }
+});
+
+/* PUT /users/me/profile - update current user profile */
+router.put("/me/profile", authenticate, async function (req, res, next) {
+  try {
+    var user = await User.findById(req.user.id).exec();
+    if (!user) {
+      return fail(res, 401, "Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại");
+    }
+
+    var fullName = (req.body.fullName || req.body.name || "").trim();
+    var phone = (req.body.phone || "").trim();
+    var location = (req.body.location || "").trim();
+
+    if (fullName) {
+      user.fullName = fullName;
+      user.name = fullName;
+    }
+    if (phone) user.phone = phone;
+    if (location) user.location = location;
+    if (req.body.avatarUrl) user.avatarUrl = String(req.body.avatarUrl).trim();
+
+    await user.save();
+    ok(res, toPublicUser(user), "Cập nhật hồ sơ thành công");
+  } catch (err) {
+    next(err);
+  }
+});
+
 /* GET /users/me - current authenticated user */
 router.get("/me", async function (req, res, next) {
   try {

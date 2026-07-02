@@ -20,7 +20,8 @@ module.exports = function jsonErrorHandler(err, req, res, next) {
     }
   }
 
-  if (req.path.startsWith("/admin") ||
+  if (req.path.startsWith("/api/v1") ||
+    req.path.startsWith("/admin") ||
     req.path.startsWith("/wallets") ||
     req.path.startsWith("/notifications") ||
     req.path.startsWith("/spectator") ||
