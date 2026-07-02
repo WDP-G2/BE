@@ -2,17 +2,21 @@ var express = require("express");
 var router = express.Router();
 var Tournament = require("../../models/tournament");
 var User = require("../../models/user");
-var RefereeSalaryConfig = require("../../models/refereeSalaryConfig");
+var RefereeInvitation = require("../../models/refereeInvitation");
 var { BetMarket } = require("../../models/betting");
 var {
   findRaceContext,
   getApprovedParticipants,
   mapParticipant,
   mapRaceSummary,
+  applyRefereeAssignment,
 } = require("../../services/tournamentRaceService");
+var { mapInvitation } = require("../../utils/refereeInvitationMapper");
 var { authenticate, requireRole } = require("../../middleware/auth");
 var asyncHandler = require("../../utils/asyncHandler");
 var { apiSuccess, apiError } = require("../../utils/apiResponse");
+var tournamentsRouter = require("../tournaments");
+var { mapTournament, applyRaceFieldsUpdate } = tournamentsRouter;
 
 router.use(authenticate, requireRole("ADMIN"));
 
@@ -121,19 +125,17 @@ router.put(
 
     var refereeId = req.body.refereeId;
     var salaryConfigId = req.body.salaryConfigId;
+    if (!refereeId || !String(refereeId).match(/^[a-fA-F0-9]{24}$/)) {
+      throw apiError("Trọng tài không hợp lệ", 400);
+    }
     var referee = await User.findById(refereeId).exec();
     if (!referee || referee.role !== "REFEREE") throw apiError("Trọng tài không hợp lệ", 400);
 
-    var amount = 0;
-    if (salaryConfigId) {
-      var config = await RefereeSalaryConfig.findById(salaryConfigId).exec();
-      amount = Number(config?.amount || 0);
+    if (salaryConfigId && !String(salaryConfigId).match(/^[a-fA-F0-9]{24}$/)) {
+      throw apiError("Cấu hình lương trọng tài không hợp lệ", 400);
     }
 
-    ctx.race.refereeId = referee._id;
-    ctx.race.salaryConfigId = salaryConfigId || null;
-    ctx.race.refereePaymentStatus = amount > 0 ? "HELD" : "NONE";
-    ctx.race.refereePaymentAmount = amount;
+    await applyRefereeAssignment(ctx.race, referee._id, salaryConfigId);
     await ctx.tournament.save();
 
     res.json(
@@ -149,6 +151,81 @@ router.put(
         "Phân công trọng tài thành công",
       ),
     );
+  }),
+);
+
+router.post(
+  "/races/:raceId/referee-invitations",
+  asyncHandler(async function (req, res) {
+    var ctx = await findRaceContext(req.params.raceId);
+    if (!ctx) throw apiError("Không tìm thấy cuộc đua", 404);
+
+    var refereeId = req.body.refereeId;
+    var salaryConfigId = req.body.salaryConfigId;
+    if (!refereeId || !String(refereeId).match(/^[a-fA-F0-9]{24}$/)) {
+      throw apiError("Trọng tài không hợp lệ", 400);
+    }
+    var referee = await User.findById(refereeId).exec();
+    if (!referee || referee.role !== "REFEREE") throw apiError("Trọng tài không hợp lệ", 400);
+
+    if (salaryConfigId && !String(salaryConfigId).match(/^[a-fA-F0-9]{24}$/)) {
+      throw apiError("Cấu hình lương trọng tài không hợp lệ", 400);
+    }
+
+    if (ctx.race.refereeId && String(ctx.race.refereeId) !== String(refereeId)) {
+      throw apiError("Cuộc đua đã có trọng tài. Không thể mời trọng tài khác.", 409);
+    }
+
+    var existing = await RefereeInvitation.findOne({
+      raceId: ctx.race._id,
+      refereeId: refereeId,
+      status: "Chờ xử lý",
+    }).exec();
+    if (existing) {
+      return res.json(apiSuccess(mapInvitation(existing), "Lời mời đang chờ phản hồi"));
+    }
+
+    var invitation = await RefereeInvitation.create({
+      raceId: ctx.race._id,
+      tournamentId: ctx.tournament._id,
+      tournamentName: ctx.tournament.name,
+      tournamentLocation: ctx.tournament.location || "",
+      raceName: ctx.race.name,
+      raceDate: ctx.race.scheduledAt ? ctx.race.scheduledAt.toISOString().slice(0, 10) : "",
+      raceTime: ctx.race.scheduledAt ? ctx.race.scheduledAt.toISOString().slice(11, 16) : "",
+      refereeId: referee._id,
+      refereeName: referee.fullName || referee.username || "",
+      salaryConfigId: salaryConfigId || null,
+      message: req.body.message || "",
+      status: "Chờ xử lý",
+    });
+
+    res.status(201).json(apiSuccess(mapInvitation(invitation), "Đã gửi lời mời trọng tài"));
+  }),
+);
+
+router.get(
+  "/races/:raceId/referee-invitations",
+  asyncHandler(async function (req, res) {
+    var rows = await RefereeInvitation.find({ raceId: req.params.raceId })
+      .sort({ createdAt: -1 })
+      .exec();
+    res.json(apiSuccess(rows.map(mapInvitation)));
+  }),
+);
+
+router.put(
+  "/referee-invitations/:id/cancel",
+  asyncHandler(async function (req, res) {
+    var invitation = await RefereeInvitation.findById(req.params.id).exec();
+    if (!invitation) throw apiError("Không tìm thấy lời mời", 404);
+    if (invitation.status !== "Chờ xử lý") {
+      throw apiError("Chỉ có thể hủy lời mời đang chờ xử lý", 400);
+    }
+    invitation.status = "Đã hủy";
+    invitation.cancelledAt = new Date();
+    await invitation.save();
+    res.json(apiSuccess(mapInvitation(invitation), "Đã hủy lời mời"));
   }),
 );
 
@@ -188,6 +265,32 @@ router.post(
     });
 
     res.status(201).json(apiSuccess({ id: String(market._id), raceId: String(market.raceId), status: market.status }, "Tạo bet market thành công"));
+  }),
+);
+
+router.put(
+  "/races/:raceId",
+  asyncHandler(async function (req, res) {
+    var ctx = await findRaceContext(req.params.raceId);
+    if (!ctx) throw apiError("Không tìm thấy cuộc đua", 404);
+
+    await applyRaceFieldsUpdate(ctx.race, req.body);
+    await ctx.tournament.save();
+
+    res.json(apiSuccess(mapTournament(ctx.tournament)));
+  }),
+);
+
+router.delete(
+  "/races/:raceId",
+  asyncHandler(async function (req, res) {
+    var ctx = await findRaceContext(req.params.raceId);
+    if (!ctx) throw apiError("Không tìm thấy cuộc đua", 404);
+
+    ctx.race.deleteOne();
+    await ctx.tournament.save();
+
+    res.json(apiSuccess(mapTournament(ctx.tournament)));
   }),
 );
 
