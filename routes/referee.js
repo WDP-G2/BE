@@ -1,7 +1,10 @@
 var express = require("express");
 var router = express.Router();
+var multer = require("multer");
 var Tournament = require("../models/tournament");
 var User = require("../models/user");
+var RefereeInvitation = require("../models/refereeInvitation");
+var Violation = require("../models/violation");
 var { authenticate, requireRole } = require("../middleware/auth");
 var asyncHandler = require("../utils/asyncHandler");
 var { apiSuccess, apiError } = require("../utils/apiResponse");
@@ -11,7 +14,19 @@ var {
   mapRaceSummary,
   getApprovedParticipants,
   mapParticipant,
+  applyRefereeAssignment,
 } = require("../services/tournamentRaceService");
+var { mapInvitation } = require("../utils/refereeInvitationMapper");
+var { mapViolation } = require("../utils/violationMapper");
+var {
+  uploadBufferToCloudinary,
+  isCloudinaryError,
+} = require("../utils/cloudinaryUpload");
+
+var evidenceUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 100 * 1024 * 1024 },
+});
 
 router.use(authenticate, requireRole("REFEREE"));
 
@@ -25,27 +40,58 @@ router.get(
   "/dashboard",
   asyncHandler(async function (req, res) {
     var rows = await getAssignedRaceRows(req.user.id);
+    var now = Date.now();
+    var upcomingRows = rows.filter(function (row) {
+      var scheduledAt = row.race.scheduledAt;
+      return scheduledAt && new Date(scheduledAt).getTime() >= now;
+    });
+
     res.json(apiSuccess({
       role: "REFEREE",
       assignedRaceCount: rows.length,
       pendingCheckInCount: 0,
       checkedInCount: 0,
       upcomingRaces: rows.slice(0, 5).map(mapRaceSummary),
+      businessSummary: {
+        upcomingRaceCount: upcomingRows.length,
+      },
+      alerts: [],
+      upcoming: upcomingRows.slice(0, 5).map(function (row) {
+        var summary = mapRaceSummary(row);
+        return {
+          id: summary.id,
+          title: summary.name,
+          at: summary.scheduledAt,
+          status: summary.statusCode,
+        };
+      }),
     }));
   }),
 );
 
+async function getCheckInCount(refereeId, checkInStatus) {
+  var rows = await getAssignedRaceRows(refereeId);
+  return rows.reduce(function (total, row) {
+    var participants = getApprovedParticipants(row.tournament, row.raceId);
+    return total + participants.filter(function (participant) {
+      return (participant.checkInStatus || "PENDING") === checkInStatus;
+    }).length;
+  }, 0);
+}
+
 router.get(
   "/dashboard/checked-in-count",
   asyncHandler(async function (req, res) {
-    res.json(apiSuccess({ count: 0 }));
+    var count = await getCheckInCount(req.user.id, "CHECKED_IN");
+    res.json(apiSuccess({ count: count }));
   }),
 );
 
 router.get(
   "/dashboard/pending-check-in-count",
   asyncHandler(async function (req, res) {
-    res.json(apiSuccess({ count: 0 }));
+    var count = await getCheckInCount(req.user.id, "PENDING");
+    res.json(apiSuccess({ count: count }));
   }),
 );
 
