@@ -49,7 +49,7 @@ router.get(
 router.get(
   "/tournament-registrations",
   asyncHandler(async function (req, res) {
-    var tournaments = await Tournament.find({}).sort({ updatedAt: -1 }).limit(20).exec();
+    var tournaments = await Tournament.find({}).sort({ updatedAt: -1 }).exec();
     var rows = [];
 
     tournaments.forEach(function (tournament) {
@@ -62,6 +62,7 @@ router.get(
         status: tournament.status,
         totalRegistrations: (tournament.registrations || []).length,
         pendingRegistrations: pending,
+        raceCount: (tournament.races || []).length,
       });
     });
 

@@ -36,6 +36,17 @@ var TOURNAMENT_STATUS_CODES = Object.keys(TOURNAMENT_STATUS_LABELS).reduce(
   {},
 );
 
+var TOURNAMENT_STATUS_TRANSITIONS = {
+  DRAFT: ["DRAFT", "PUBLISHED", "CANCELLED"],
+  PUBLISHED: ["PUBLISHED", "OPEN_REGISTRATION", "CANCELLED"],
+  OPEN_REGISTRATION: ["OPEN_REGISTRATION", "REGISTRATION_CLOSED"],
+  REGISTRATION_CLOSED: ["REGISTRATION_CLOSED", "SCHEDULED"],
+  SCHEDULED: ["SCHEDULED", "ONGOING"],
+  ONGOING: ["ONGOING", "COMPLETED"],
+  COMPLETED: ["COMPLETED"],
+  CANCELLED: ["CANCELLED"],
+};
+
 var RACE_STATUS_LABELS = {
   DRAFT: "Nháp",
   SCHEDULED: "Sắp diễn ra",
@@ -810,6 +821,25 @@ async function resolveVenueInfo(venueId) {
   };
 }
 
+async function resolveRefereeAssignment(rawValue) {
+  var value = rawValue == null ? "" : String(rawValue).trim();
+  if (!value) return { provided: rawValue !== undefined, refereeId: null };
+  if (!value.match(/^[a-fA-F0-9]{24}$/)) {
+    var err = new Error("Trọng tài không hợp lệ");
+    err.status = 400;
+    err.expose = true;
+    throw err;
+  }
+  var referee = await User.findById(value).exec();
+  if (!referee || referee.role !== "REFEREE") {
+    var roleErr = new Error("Trọng tài không hợp lệ");
+    roleErr.status = 400;
+    roleErr.expose = true;
+    throw roleErr;
+  }
+  return { provided: true, refereeId: referee._id };
+}
+
 async function applyRaceFieldsUpdate(race, body) {
   if (body.name !== undefined) race.name = body.name;
   if (body.raceNumber !== undefined)
@@ -842,6 +872,15 @@ async function applyRaceFieldsUpdate(race, body) {
   if (body.regDeadline !== undefined) race.regDeadline = toDate(body.regDeadline);
   if (body.checkIn !== undefined) race.checkIn = body.checkIn;
   if (body.prizes !== undefined) race.prizes = buildPrizesFromBody(body.prizes);
+  if (body.refereeId !== undefined) {
+    var refereeAssignment = await resolveRefereeAssignment(body.refereeId);
+    race.refereeId = refereeAssignment.refereeId;
+    if (!refereeAssignment.refereeId) {
+      race.salaryConfigId = null;
+      race.refereePaymentStatus = "NONE";
+      race.refereePaymentAmount = 0;
+    }
+  }
 }
 
 async function buildRacePayload(body, fallbackRaceNumber, defaults) {
@@ -849,6 +888,7 @@ async function buildRacePayload(body, fallbackRaceNumber, defaults) {
   var venueInfo = body.venueId
     ? await resolveVenueInfo(body.venueId)
     : { venueId: "", venueName: "", venueAddress: "" };
+  var refereeAssignment = await resolveRefereeAssignment(body.refereeId);
 
   return {
     raceNumber: toNumber(body.raceNumber, fallbackRaceNumber),
@@ -871,6 +911,7 @@ async function buildRacePayload(body, fallbackRaceNumber, defaults) {
     regDeadline: toDate(body.regDeadline) || defaults.regDeadline,
     checkIn: body.checkIn || defaults.checkIn || "",
     prizes: buildPrizesFromBody(body.prizes),
+    refereeId: refereeAssignment.refereeId,
   };
 }
 
@@ -1080,7 +1121,34 @@ router.put(
         return fail(res, 400, "Vui lòng chọn trạng thái giải đấu");
       }
 
+      var currentStatusCode = toTournamentStatusCode(tournament.status);
       var nextStatusCode = toTournamentStatusCode(statusValue);
+      var allowedNext =
+        TOURNAMENT_STATUS_TRANSITIONS[currentStatusCode] || [currentStatusCode];
+
+      if (allowedNext.indexOf(nextStatusCode) === -1) {
+        return fail(
+          res,
+          400,
+          "Không thể chuyển sang trạng thái này từ trạng thái hiện tại",
+        );
+      }
+
+      if (currentStatusCode === "ONGOING" && nextStatusCode === "COMPLETED") {
+        var pendingRaces = (tournament.races || []).filter(function (race) {
+          return toRaceStatusCode(race.status) !== "RESULT_CONFIRMED";
+        });
+        if (pendingRaces.length > 0) {
+          return fail(
+            res,
+            400,
+            "Còn " +
+              pendingRaces.length +
+              " cuộc đua chưa ghi nhận kết quả. Trọng tài cần hoàn tất trước khi kết thúc giải.",
+          );
+        }
+      }
+
       tournament.status = toTournamentStatusLabel(
         statusValue,
         tournament.status,

@@ -38,40 +38,6 @@ function mapRegistration(tournament, reg) {
 }
 
 router.get(
-  "/tournaments",
-  asyncHandler(async function (req, res) {
-    var filter = {};
-    if (req.query.status) filter.status = req.query.status;
-    var rows = await Tournament.find(filter).sort({ updatedAt: -1 }).exec();
-    res.json(
-      apiSuccess(
-        rows.map(function (t) {
-          return {
-            id: String(t._id),
-            name: t.name,
-            slug: t.slug,
-            status: t.status,
-            location: t.location,
-            startDate: t.startDate,
-            endDate: t.endDate,
-            raceCount: (t.races || []).length,
-          };
-        }),
-      ),
-    );
-  }),
-);
-
-router.get(
-  "/tournaments/:id",
-  asyncHandler(async function (req, res) {
-    var tournament = await Tournament.findById(req.params.id).exec();
-    if (!tournament) throw apiError("Không tìm thấy giải đấu", 404);
-    res.json(apiSuccess(tournament));
-  }),
-);
-
-router.get(
   "/tournaments/:id/race-registrations",
   asyncHandler(async function (req, res) {
     var tournament = await Tournament.findById(req.params.id).exec();

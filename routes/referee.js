@@ -36,32 +36,94 @@ async function getAssignedRaceRows(refereeId) {
   });
 }
 
+var CHECK_IN_ALERT_WINDOW_MS = 2 * 60 * 60 * 1000;
+
+function buildDashboardAlerts(summaries, now) {
+  var alerts = [];
+
+  summaries.forEach(function (summary) {
+    var scheduledMs = summary.scheduledStartAt
+      ? new Date(summary.scheduledStartAt).getTime()
+      : null;
+
+    if (summary.statusCode === "ONGOING") {
+      alerts.push({
+        type: "warning",
+        title: (summary.name || "Cuộc đua") + " đang diễn ra. Đừng quên chốt kết quả sau khi về đích.",
+        status: summary.statusCode,
+      });
+      return;
+    }
+
+    if (
+      scheduledMs !== null &&
+      scheduledMs >= now &&
+      scheduledMs - now <= CHECK_IN_ALERT_WINDOW_MS &&
+      summary.pendingCheckInCount > 0
+    ) {
+      alerts.push({
+        type: "info",
+        title:
+          (summary.name || "Cuộc đua") +
+          " sắp diễn ra, còn " +
+          summary.pendingCheckInCount +
+          " vận động viên chưa check-in.",
+        status: summary.statusCode,
+      });
+      return;
+    }
+
+    if (
+      scheduledMs !== null &&
+      scheduledMs < now &&
+      (summary.statusCode === "DRAFT" || summary.statusCode === "SCHEDULED")
+    ) {
+      alerts.push({
+        type: "danger",
+        title: (summary.name || "Cuộc đua") + " đã quá giờ dự kiến nhưng chưa bắt đầu.",
+        status: summary.statusCode,
+      });
+    }
+  });
+
+  return alerts;
+}
+
 router.get(
   "/dashboard",
   asyncHandler(async function (req, res) {
     var rows = await getAssignedRaceRows(req.user.id);
     var now = Date.now();
-    var upcomingRows = rows.filter(function (row) {
-      var scheduledAt = row.race.scheduledAt;
-      return scheduledAt && new Date(scheduledAt).getTime() >= now;
+    var summaries = rows.map(mapRaceSummary);
+    var upcomingSummaries = summaries.filter(function (summary) {
+      return (
+        summary.scheduledStartAt &&
+        new Date(summary.scheduledStartAt).getTime() >= now
+      );
     });
+
+    var checkedInCount = summaries.reduce(function (sum, summary) {
+      return sum + summary.checkedInCount;
+    }, 0);
+    var pendingCheckInCount = summaries.reduce(function (sum, summary) {
+      return sum + summary.pendingCheckInCount;
+    }, 0);
 
     res.json(apiSuccess({
       role: "REFEREE",
       assignedRaceCount: rows.length,
-      pendingCheckInCount: 0,
-      checkedInCount: 0,
-      upcomingRaces: rows.slice(0, 5).map(mapRaceSummary),
+      pendingCheckInCount: pendingCheckInCount,
+      checkedInCount: checkedInCount,
+      upcomingRaces: summaries.slice(0, 5),
       businessSummary: {
-        upcomingRaceCount: upcomingRows.length,
+        upcomingRaceCount: upcomingSummaries.length,
       },
-      alerts: [],
-      upcoming: upcomingRows.slice(0, 5).map(function (row) {
-        var summary = mapRaceSummary(row);
+      alerts: buildDashboardAlerts(summaries, now).slice(0, 10),
+      upcoming: upcomingSummaries.slice(0, 5).map(function (summary) {
         return {
           id: summary.id,
           title: summary.name,
-          at: summary.scheduledAt,
+          at: summary.scheduledStartAt,
           status: summary.statusCode,
         };
       }),
@@ -159,11 +221,35 @@ router.put(
   }),
 );
 
+var RACE_STATUS_START_ALIASES = {
+  "Nháp": true,
+  "Sắp chạy": true,
+  "Sắp diễn ra": true,
+  "Đã lên lịch": true,
+};
+
+var RACE_STATUS_ONGOING_ALIASES = {
+  "Đang chạy": true,
+  "Đang diễn ra": true,
+};
+
 router.put(
   "/races/:raceId/start",
   asyncHandler(async function (req, res) {
     var ctx = await findRaceContext(req.params.raceId);
     if (!ctx) throw apiError("Không tìm thấy cuộc đua", 404);
+    if (!ctx.race.refereeId || String(ctx.race.refereeId) !== String(req.user.id)) {
+      throw apiError("Bạn không được phân công cuộc đua này", 403);
+    }
+    if (ctx.tournament.status !== "Đang diễn ra") {
+      throw apiError(
+        "Giải đấu chưa được bắt đầu. Vui lòng chờ ban tổ chức chuyển giải sang trạng thái Đang diễn ra.",
+        409,
+      );
+    }
+    if (!RACE_STATUS_START_ALIASES[ctx.race.status]) {
+      throw apiError("Cuộc đua không ở trạng thái có thể bắt đầu", 409);
+    }
     ctx.race.status = "Đang chạy";
     await ctx.tournament.save();
     res.json(apiSuccess(mapRaceSummary({
@@ -180,6 +266,12 @@ router.post(
   asyncHandler(async function (req, res) {
     var ctx = await findRaceContext(req.params.raceId);
     if (!ctx) throw apiError("Không tìm thấy cuộc đua", 404);
+    if (!ctx.race.refereeId || String(ctx.race.refereeId) !== String(req.user.id)) {
+      throw apiError("Bạn không được phân công cuộc đua này", 403);
+    }
+    if (!RACE_STATUS_ONGOING_ALIASES[ctx.race.status]) {
+      throw apiError("Cuộc đua chưa bắt đầu nên không thể chốt kết quả", 409);
+    }
     var results = Array.isArray(req.body.results) ? req.body.results : [];
     ctx.race.results = results.map(function (item, index) {
       return {

@@ -55,6 +55,12 @@ function mapRaceSummary(ctx) {
   var statusCode =
     raceStatusAliases[String(race.status || "").trim()] ||
     String(race.status || "").trim().toUpperCase();
+  var participants = ctx.tournament
+    ? getApprovedParticipants(ctx.tournament, race._id)
+    : [];
+  var checkedInCount = participants.filter(function (reg) {
+    return reg.checkInStatus === "CHECKED_IN";
+  }).length;
   return {
     id: String(race._id),
     raceId: String(race._id),
@@ -64,12 +70,20 @@ function mapRaceSummary(ctx) {
     raceNumber: race.raceNumber,
     distance: race.distance,
     scheduledAt: race.scheduledAt,
+    scheduledStartAt: race.scheduledAt,
+    scheduledEndAt: race.scheduledEndAt || null,
+    venueName: race.venueName || "",
+    venueAddress: race.venueAddress || "",
+    track: race.venueName || race.venueAddress || race.track || "",
     status: statusCode,
     statusCode: statusCode,
     statusLabel: race.status,
     refereeId: race.refereeId ? String(race.refereeId) : null,
     refereePaymentStatus: race.refereePaymentStatus || null,
     salaryConfigId: race.salaryConfigId ? String(race.salaryConfigId) : null,
+    participantCount: participants.length,
+    checkedInCount: checkedInCount,
+    pendingCheckInCount: participants.length - checkedInCount,
   };
 }
 
