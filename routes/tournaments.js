@@ -1336,6 +1336,108 @@ router.patch(
   },
 );
 
+router.put(
+  "/:identifier",
+  authenticate,
+  requireRole("ADMIN"),
+  async function (req, res, next) {
+    try {
+      var tournament = await findTournamentByIdOrSlug(
+        req.params.identifier,
+      ).exec();
+
+      if (!tournament) {
+        return fail(res, 404, "Không tìm thấy giải đấu");
+      }
+
+      if (req.body.name !== undefined) {
+        tournament.name = String(req.body.name).trim() || tournament.name;
+      }
+      if (req.body.description !== undefined)
+        tournament.description = req.body.description;
+      if (req.body.location !== undefined) tournament.location = req.body.location;
+      if (req.body.banner !== undefined || req.body.bannerUrl !== undefined) {
+        tournament.banner = req.body.banner || req.body.bannerUrl || "";
+      }
+      if (req.body.type !== undefined) tournament.type = req.body.type;
+      if (req.body.status !== undefined) {
+        tournament.status = toTournamentStatusLabel(
+          req.body.status,
+          tournament.status,
+        );
+      }
+      if (req.body.startDate !== undefined || req.body.startAt !== undefined) {
+        tournament.startDate = toDate(req.body.startAt || req.body.startDate);
+      }
+      if (req.body.endDate !== undefined || req.body.endAt !== undefined) {
+        tournament.endDate = toDate(req.body.endAt || req.body.endDate);
+      }
+      if (req.body.rules !== undefined) tournament.rules = req.body.rules;
+
+      var currentConfig = tournament.config && tournament.config.toObject
+        ? tournament.config.toObject()
+        : tournament.config || {};
+      var nextConfig = Object.assign({}, currentConfig);
+
+      if (req.body.registrationCloseAt !== undefined) {
+        nextConfig.deadlineAt = toDate(req.body.registrationCloseAt);
+      }
+      if (req.body.entryFee !== undefined) {
+        nextConfig.entryFee = toNumber(req.body.entryFee, nextConfig.entryFee || 0);
+      }
+      if (req.body.depositFee !== undefined) {
+        nextConfig.depositFee = toNumber(
+          req.body.depositFee,
+          nextConfig.depositFee || 0,
+        );
+      }
+      if (req.body.config) {
+        nextConfig = Object.assign(
+          nextConfig,
+          parseMaybeJson(req.body.config, req.body.config),
+        );
+      }
+      tournament.config = nextConfig;
+      applyTournamentSettingsFields(tournament, req.body);
+
+      await tournament.save();
+      res.json(mapTournament(tournament));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.delete(
+  "/:identifier",
+  authenticate,
+  requireRole("ADMIN"),
+  async function (req, res, next) {
+    try {
+      var tournament = await findTournamentByIdOrSlug(
+        req.params.identifier,
+      ).exec();
+
+      if (!tournament) {
+        return fail(res, 404, "Không tìm thấy giải đấu");
+      }
+
+      if ((tournament.registrations || []).length > 0) {
+        return fail(
+          res,
+          409,
+          "Không thể xóa giải đấu đã có đội đăng ký",
+        );
+      }
+
+      await tournament.deleteOne();
+      res.json({ success: true, message: "Xóa giải đấu thành công", data: null });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 router.patch(
   "/:identifier/config",
   authenticate,
@@ -1351,7 +1453,10 @@ router.patch(
       }
 
       tournament.type = req.body.type || tournament.type;
-      tournament.status = req.body.status || tournament.status;
+      tournament.status =
+        req.body.status !== undefined
+          ? toTournamentStatusLabel(req.body.status, tournament.status)
+          : tournament.status;
       tournament.rules =
         req.body.rules !== undefined ? req.body.rules : tournament.rules;
       tournament.config = Object.assign(
@@ -1435,15 +1540,51 @@ router.post(
         req.body.raceNumber || tournament.races.length + 1,
       );
 
-      tournament.races.push(
-        Object.assign(
-          buildRacePayload(req.body, raceNumber, getRaceDefaults(tournament)),
-          { results: [] },
-        ),
+      var newRacePayload = await buildRacePayload(
+        req.body,
+        raceNumber,
+        getRaceDefaults(tournament),
       );
+      tournament.races.push(Object.assign(newRacePayload, { results: [] }));
 
       await tournament.save();
       res.status(201).json(mapTournament(tournament));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.put(
+  "/:identifier/races",
+  authenticate,
+  requireRole("ADMIN"),
+  async function (req, res, next) {
+    try {
+      var tournament = await findTournamentByIdOrSlug(
+        req.params.identifier,
+      ).exec();
+
+      if (!tournament) {
+        return fail(res, 404, "Không tìm thấy giải đấu");
+      }
+
+      var races = Array.isArray(req.body) ? req.body : req.body.races;
+      if (!Array.isArray(races)) {
+        return fail(res, 400, "Danh sách cuộc đua không hợp lệ");
+      }
+
+      var defaults = getRaceDefaults(tournament);
+      var nextRaces = await Promise.all(
+        races.map(async function (race, index) {
+          var payload = await buildRacePayload(race, index + 1, defaults);
+          return Object.assign(payload, { results: [] });
+        }),
+      );
+      tournament.races = nextRaces;
+
+      await tournament.save();
+      res.json(mapTournament(tournament));
     } catch (err) {
       next(err);
     }
@@ -1490,38 +1631,7 @@ router.patch(
         return fail(res, 404, "Không tìm thấy cuộc đua");
       }
 
-      if (req.body.name !== undefined) race.name = req.body.name;
-      if (req.body.raceNumber !== undefined)
-        race.raceNumber = toNumber(req.body.raceNumber, race.raceNumber);
-      if (req.body.distance !== undefined)
-        race.distance = toNumber(req.body.distance, race.distance);
-      if (req.body.scheduledAt !== undefined)
-        race.scheduledAt = toDate(req.body.scheduledAt);
-      if (req.body.status !== undefined) race.status = req.body.status;
-      if (req.body.description !== undefined)
-        race.description = req.body.description;
-      if (req.body.track !== undefined) race.track = req.body.track;
-      if (req.body.surface !== undefined) race.surface = req.body.surface;
-      if (req.body.category !== undefined) race.category = req.body.category;
-      if (req.body.minHorses !== undefined)
-        race.minHorses = toNumber(req.body.minHorses, race.minHorses);
-      if (req.body.maxHorses !== undefined)
-        race.maxHorses = toNumber(req.body.maxHorses, race.maxHorses);
-      if (req.body.entryFee !== undefined)
-        race.entryFee = toNumber(req.body.entryFee, race.entryFee);
-      if (req.body.deposit !== undefined)
-        race.deposit = toNumber(req.body.deposit, race.deposit);
-      if (req.body.regDeadline !== undefined)
-        race.regDeadline = toDate(req.body.regDeadline);
-      if (req.body.checkIn !== undefined) race.checkIn = req.body.checkIn;
-      if (req.body.prizes) {
-        var currentPrizes = mapPrizes(race.prizes);
-        race.prizes = Object.assign(currentPrizes, {
-          first: toNumber(req.body.prizes.first, currentPrizes.first),
-          second: toNumber(req.body.prizes.second, currentPrizes.second),
-          third: toNumber(req.body.prizes.third, currentPrizes.third),
-        });
-      }
+      await applyRaceFieldsUpdate(race, req.body);
 
       await tournament.save();
       res.json(mapTournament(tournament));
@@ -1626,7 +1736,10 @@ router.post(
         return fail(res, 400, "Ngựa không đủ điều kiện thi đấu");
       }
 
-      var ageRestriction = getHorseAgeRestriction(horse, getRaceStartDate(tournament, race));
+      var ageRestriction = getHorseAgeRestriction(
+        horse,
+        getRaceStartDate(tournament, race),
+      );
       if (ageRestriction) {
         return res.status(400).json({ error: ageRestriction });
       }
@@ -1771,8 +1884,11 @@ router.post(
           notes: item.notes || "",
         };
       });
-      race.status = req.body.status || "Hoàn thành";
-      tournament.status = req.body.tournamentStatus || tournament.status;
+      race.status = toRaceStatusLabel(req.body.status, "Hoàn thành");
+      tournament.status =
+        req.body.tournamentStatus !== undefined
+          ? toTournamentStatusLabel(req.body.tournamentStatus, tournament.status)
+          : tournament.status;
 
       await tournament.save();
       res.json(mapTournament(tournament));
@@ -1806,3 +1922,5 @@ router.get("/:identifier/results", async function (req, res, next) {
 });
 
 module.exports = router;
+module.exports.mapTournament = mapTournament;
+module.exports.applyRaceFieldsUpdate = applyRaceFieldsUpdate;
