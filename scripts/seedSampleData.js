@@ -107,6 +107,8 @@ async function ensurePlatformData(users) {
   var SystemSettings = require("../models/systemSettings");
   var RefereeSalaryConfig = require("../models/refereeSalaryConfig");
   var Province = require("../models/province");
+  var Tournament = require("../models/tournament");
+  var News = require("../models/news");
   var { getUserWallet, getSystemWallet } = require("../services/walletLedger");
 
   await SystemSettings.findOneAndUpdate(
@@ -149,6 +151,86 @@ async function ensurePlatformData(users) {
 
   await getSystemWallet();
 
+  var adminUser = users.find(function (user) {
+    return user.role === "ADMIN";
+  });
+
+  await Tournament.findOneAndUpdate(
+    { slug: "giai-dau-mua-xuan-2026" },
+    {
+      $setOnInsert: {
+        name: "Giải đua Mùa Xuân 2026",
+        slug: "giai-dau-mua-xuan-2026",
+        description: "Giải đua ngựa mở mùa tại TP. Hồ Chí Minh",
+        location: "Trường đua Phú Thọ, TP. Hồ Chí Minh",
+        banner:
+          "https://images.unsplash.com/photo-1507514604110-ba3347c457f6?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&q=80&w=1080",
+        type: "regular",
+        status: "Đang mở đăng ký",
+        startDate: new Date("2026-04-15T08:00:00.000Z"),
+        endDate: new Date("2026-04-17T18:00:00.000Z"),
+        createdBy: adminUser ? adminUser._id : undefined,
+        config: {
+          entryFee: 5000000,
+          depositFee: 1000000,
+          refundDays: 3,
+          maxRaces: 3,
+          maxRegistrations: 30,
+        },
+        races: [
+          {
+            raceNumber: 1,
+            name: "Chặng 1200m",
+            distance: 1200,
+            scheduledAt: new Date("2026-04-15T09:00:00.000Z"),
+            status: "Sắp chạy",
+            track: "Trường đua Phú Thọ",
+            surface: "Cỏ",
+            category: "Open",
+            minHorses: 4,
+            maxHorses: 12,
+            entryFee: 5000000,
+            prizes: { first: 20000000, second: 10000000, third: 5000000 },
+          },
+          {
+            raceNumber: 2,
+            name: "Chặng 1600m",
+            distance: 1600,
+            scheduledAt: new Date("2026-04-16T09:00:00.000Z"),
+            status: "Nháp",
+            track: "Trường đua Phú Thọ",
+            surface: "Cỏ",
+            category: "Open",
+            minHorses: 4,
+            maxHorses: 12,
+            entryFee: 5000000,
+            prizes: { first: 25000000, second: 12000000, third: 6000000 },
+          },
+        ],
+      },
+    },
+    { upsert: true, new: true },
+  ).exec();
+
+  await News.findOneAndUpdate(
+    { slug: "mo-dang-ky-giai-dau-mua-xuan-2026" },
+    {
+      $setOnInsert: {
+        slug: "mo-dang-ky-giai-dau-mua-xuan-2026",
+        title: "Mở đăng ký Giải đua Mùa Xuân 2026",
+        summary: "Giải đua ngựa đầu mùa chính thức mở đăng ký cho chủ ngựa và kỵ sĩ.",
+        content:
+          "Ban tổ chức thông báo mở đăng ký Giải đua Mùa Xuân 2026 tại Trường đua Phú Thọ. Chủ ngựa có thể đăng ký trực tuyến trên hệ thống.",
+        category: "Tin tức",
+        status: "published",
+        featured: true,
+        authorName: "Ban quản trị",
+        createdBy: adminUser ? adminUser._id : undefined,
+      },
+    },
+    { upsert: true, new: true },
+  ).exec();
+
   for (var i = 0; i < users.length; i += 1) {
     var wallet = await getUserWallet(users[i]._id);
     if (users[i].role === "SPECTATOR" && Number(wallet.availableBalance || 0) < 1000000) {
@@ -163,7 +245,11 @@ module.exports = {
 };
 
 if (require.main === module) {
-  seedSampleData()
+  var connectPromise = require("../db").connectPromise;
+  connectPromise
+    .then(function () {
+      return seedSampleData();
+    })
     .then(function () {
       process.exit(0);
     })

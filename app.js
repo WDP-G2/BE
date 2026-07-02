@@ -6,6 +6,7 @@ var cookieParser = require("cookie-parser");
 var logger = require("morgan");
 
 var indexRouter = require("./routes/index");
+var authRouter = require("./routes/auth");
 var usersRouter = require("./routes/users");
 var tournamentsRouter = require("./routes/tournaments");
 var tournamentExtrasRouter = require("./routes/tournamentExtras");
@@ -40,6 +41,17 @@ app.use(express.urlencoded({ extended: true, limit: "12mb" }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, "public")));
 
+app.use(function (req, res, next) {
+  res.header("Access-Control-Allow-Origin", req.headers.origin || "*");
+  res.header("Access-Control-Allow-Credentials", "true");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(204);
+  }
+  next();
+});
+
 app.use("/", indexRouter);
 app.use("/users", usersRouter);
 app.use("/users", bettingRoutes.usersBettingRouter);
@@ -61,10 +73,51 @@ app.use("/rankings", rankingsRouter);
 app.use("/bets", betsRouter);
 app.use("/races", bettingRoutes.racesRouter);
 
-if (process.env.MONGODB_URI) {
-  seedSampleData().catch(function (err) {
-    console.error("Sample data seed error:", err.message || err);
+var apiRouter = express.Router();
+apiRouter.use("/auth", authRouter);
+apiRouter.use("/users", usersRouter);
+apiRouter.use("/users", bettingRoutes.usersBettingRouter);
+apiRouter.use("/tournaments", tournamentsRouter);
+apiRouter.use("/tournaments", tournamentExtrasRouter);
+apiRouter.use("/news", newsRouter);
+apiRouter.use("/horses", horsesRouter);
+apiRouter.use("/invitations", invitationsRouter);
+apiRouter.use("/admin", adminRouter);
+apiRouter.use("/wallets", walletsRouter);
+apiRouter.use("/notifications", notificationsRouter);
+apiRouter.use("/spectator", spectatorRouter);
+apiRouter.use("/referee", refereeRouter);
+apiRouter.use("/owner", ownerRouter);
+apiRouter.use("/jockey", jockeyRouter);
+apiRouter.use("/jockeys", jockeysRouter);
+apiRouter.use("/role-applications", roleApplicationsRouter);
+apiRouter.use("/rankings", rankingsRouter);
+apiRouter.use("/bets", betsRouter);
+apiRouter.use("/races", bettingRoutes.racesRouter);
+
+apiRouter.get("/health", function (req, res) {
+  var mongoose = require("./db");
+  res.json({
+    success: true,
+    message: "OK",
+    data: {
+      database: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+      databaseName: mongoose.connection.name || null,
+    },
   });
+});
+
+app.use("/api/v1", apiRouter);
+
+if (process.env.MONGODB_URI) {
+  var connectPromise = require("./db").connectPromise;
+  connectPromise
+    .then(function () {
+      return seedSampleData();
+    })
+    .catch(function (err) {
+      console.error("Sample data seed error:", err.message || err);
+    });
 }
 
 app.use(function (req, res, next) {
