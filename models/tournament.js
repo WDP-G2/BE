@@ -14,24 +14,27 @@ var ResultSchema = new Schema(
   { _id: true },
 );
 
-var PrizeSchema = new Schema(
-  {
-    first: { type: Number, default: 0 },
-    second: { type: Number, default: 0 },
-    third: { type: Number, default: 0 },
-  },
-  { _id: false },
-);
-
 var RaceSchema = new Schema(
   {
     raceNumber: { type: Number, required: true },
     name: { type: String, required: true },
-    distance: { type: Number, required: true },
+    distance: { type: String, required: true },
     scheduledAt: { type: Date },
+    scheduledEndAt: { type: Date },
+    venueId: { type: String, default: "" },
+    venueName: { type: String, default: "" },
+    venueAddress: { type: String, default: "" },
     status: {
       type: String,
-      enum: ["Nháp", "Sắp chạy", "Đang chạy", "Hoàn thành"],
+      enum: [
+        "Nháp",
+        "Sắp chạy",
+        "Sắp diễn ra",
+        "Đang chạy",
+        "Đang diễn ra",
+        "Hoàn thành",
+        "Đã hủy",
+      ],
       default: "Nháp",
     },
     description: { type: String },
@@ -44,12 +47,7 @@ var RaceSchema = new Schema(
     deposit: { type: Number, default: 0 },
     regDeadline: { type: Date },
     checkIn: { type: String, default: "" },
-    prizes: {
-      type: PrizeSchema,
-      default: function () {
-        return {};
-      },
-    },
+    prizes: { type: Schema.Types.Mixed, default: [] },
     results: [ResultSchema],
     refereeId: { type: Schema.Types.ObjectId, ref: "User" },
     salaryConfigId: { type: Schema.Types.ObjectId, ref: "RefereeSalaryConfig" },
@@ -112,11 +110,41 @@ var TournamentSchema = new Schema(
     },
     status: {
       type: String,
-      enum: ["Nháp", "Đang mở đăng ký", "Đang diễn ra", "Đã kết thúc"],
+      enum: [
+        "Nháp",
+        "Đã công bố",
+        "Đang mở đăng ký",
+        "Đã đóng đăng ký",
+        "Đã lên lịch",
+        "Đang diễn ra",
+        "Đã kết thúc",
+        "Đã hủy",
+      ],
       default: "Nháp",
     },
     startDate: { type: Date },
     endDate: { type: Date },
+    provinceId: { type: Schema.Types.ObjectId, ref: "Province" },
+    registrationOpenAt: { type: Date },
+    checkInDeadlineAt: { type: Date },
+    minTeams: { type: Number, default: 1 },
+    maxTeams: { type: Number, default: 0 },
+    minHorsesPerOwner: { type: Number, default: 4 },
+    maxHorsesPerOwner: { type: Number, default: 10 },
+    jockeyChallengeEnabled: { type: Boolean, default: false },
+    jockeyChallengeFirstPoints: { type: Number, default: 3 },
+    jockeyChallengeSecondPoints: { type: Number, default: 2 },
+    jockeyChallengeThirdPoints: { type: Number, default: 1 },
+    jockeyChallengePrizes: {
+      type: [
+        {
+          rank: { type: Number, required: true },
+          amount: { type: Number, default: 0 },
+          note: { type: String, default: "" },
+        },
+      ],
+      default: [],
+    },
     rules: { type: String, default: "" },
     config: {
       entryFee: { type: Number, default: 0 },

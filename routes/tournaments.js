@@ -1,24 +1,99 @@
 var express = require("express");
 var router = express.Router();
 var mongoose = require("mongoose");
-var crypto = require("crypto");
 var multer = require("multer");
 var User = require("../models/user");
 var Horse = require("../models/horse");
 var Tournament = require("../models/tournament");
+var Province = require("../models/province");
 var JockeyInvitation = require("../models/jockeyInvitation");
 var { authenticate, requireRole } = require("../middleware/auth");
 var { fail } = require("../utils/httpErrors");
+var {
+  uploadBufferToCloudinary,
+  isCloudinaryError,
+} = require("../utils/cloudinaryUpload");
+var { mapVenue } = require("../utils/systemSettingsMapper");
 
-var CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || "";
-var CLOUDINARY_API_KEY = process.env.CLOUDINARY_API_KEY || "";
-var CLOUDINARY_API_SECRET = process.env.CLOUDINARY_API_SECRET || "";
 var MIN_RACE_AGE_MONTHS = 24;
 
-function requireCloudinaryConfig() {
-  if (!CLOUDINARY_CLOUD_NAME || !CLOUDINARY_API_KEY || !CLOUDINARY_API_SECRET) {
-    throw new Error("Cloudinary is not configured");
-  }
+var TOURNAMENT_STATUS_LABELS = {
+  DRAFT: "Nháp",
+  PUBLISHED: "Đã công bố",
+  OPEN_REGISTRATION: "Đang mở đăng ký",
+  REGISTRATION_CLOSED: "Đã đóng đăng ký",
+  SCHEDULED: "Đã lên lịch",
+  ONGOING: "Đang diễn ra",
+  COMPLETED: "Đã kết thúc",
+  CANCELLED: "Đã hủy",
+};
+
+var TOURNAMENT_STATUS_CODES = Object.keys(TOURNAMENT_STATUS_LABELS).reduce(
+  function (result, code) {
+    result[TOURNAMENT_STATUS_LABELS[code]] = code;
+    return result;
+  },
+  {},
+);
+
+var RACE_STATUS_LABELS = {
+  DRAFT: "Nháp",
+  SCHEDULED: "Sắp diễn ra",
+  ONGOING: "Đang diễn ra",
+  RESULT_CONFIRMED: "Hoàn thành",
+  CANCELLED: "Đã hủy",
+};
+
+var RACE_STATUS_CODES = {
+  "Nháp": "DRAFT",
+  "Sắp chạy": "SCHEDULED",
+  "Sắp diễn ra": "SCHEDULED",
+  "Đã lên lịch": "SCHEDULED",
+  "Đang chạy": "ONGOING",
+  "Đang diễn ra": "ONGOING",
+  "Hoàn thành": "RESULT_CONFIRMED",
+  "Đã chốt kết quả": "RESULT_CONFIRMED",
+  "Đã hủy": "CANCELLED",
+};
+
+function normalizeStatusKey(value) {
+  return String(value || "")
+    .trim()
+    .toUpperCase();
+}
+
+function toTournamentStatusLabel(value, fallback) {
+  var trimmed = String(value || "").trim();
+  if (!trimmed) return fallback || TOURNAMENT_STATUS_LABELS.DRAFT;
+
+  var code = normalizeStatusKey(trimmed);
+  return TOURNAMENT_STATUS_LABELS[code] || trimmed;
+}
+
+function toTournamentStatusCode(value) {
+  var trimmed = String(value || "").trim();
+  if (!trimmed) return "DRAFT";
+
+  var code = normalizeStatusKey(trimmed);
+  return TOURNAMENT_STATUS_LABELS[code]
+    ? code
+    : TOURNAMENT_STATUS_CODES[trimmed] || code;
+}
+
+function toRaceStatusLabel(value, fallback) {
+  var trimmed = String(value || "").trim();
+  if (!trimmed) return fallback || RACE_STATUS_LABELS.DRAFT;
+
+  var code = normalizeStatusKey(trimmed);
+  return RACE_STATUS_LABELS[code] || trimmed;
+}
+
+function toRaceStatusCode(value) {
+  var trimmed = String(value || "").trim();
+  if (!trimmed) return "DRAFT";
+
+  var code = normalizeStatusKey(trimmed);
+  return RACE_STATUS_LABELS[code] ? code : RACE_STATUS_CODES[trimmed] || code;
 }
 
 var storage = multer.memoryStorage();
@@ -37,74 +112,6 @@ var upload = multer({
   limits: { fileSize: 8 * 1024 * 1024 },
 });
 
-function signCloudinaryParams(params) {
-  var payload = Object.keys(params)
-    .sort()
-    .map(function (key) {
-      return key + "=" + params[key];
-    })
-    .join("&");
-
-  return crypto
-    .createHash("sha1")
-    .update(payload + CLOUDINARY_API_SECRET)
-    .digest("hex");
-}
-
-function uploadBufferToCloudinary(file, folder) {
-  return new Promise(function (resolve, reject) {
-    if (!file || !file.buffer) {
-      return resolve(null);
-    }
-
-    try {
-      requireCloudinaryConfig();
-    } catch (error) {
-      return reject(error);
-    }
-
-    var timestamp = Math.floor(Date.now() / 1000).toString();
-    var params = {
-      folder: folder,
-      timestamp: timestamp,
-    };
-    var signature = signCloudinaryParams(params);
-    var formData = new FormData();
-
-    formData.append(
-      "file",
-      new Blob([file.buffer], {
-        type: file.mimetype || "application/octet-stream",
-      }),
-      file.originalname || "upload.jpg",
-    );
-    formData.append("api_key", CLOUDINARY_API_KEY);
-    formData.append("timestamp", timestamp);
-    formData.append("folder", folder);
-    formData.append("signature", signature);
-
-    fetch(
-      "https://api.cloudinary.com/v1_1/" +
-        encodeURIComponent(CLOUDINARY_CLOUD_NAME) +
-        "/image/upload",
-      {
-        method: "POST",
-        body: formData,
-      },
-    )
-      .then(function (response) {
-        return response.text().then(function (text) {
-          if (!response.ok) {
-            throw new Error(text || "Cloudinary upload failed");
-          }
-          return text ? JSON.parse(text) : {};
-        });
-      })
-      .then(resolve)
-      .catch(reject);
-  });
-}
-
 function createSlug(value) {
   return String(value || "")
     .toLowerCase()
@@ -117,7 +124,16 @@ function createSlug(value) {
 
 function toDate(value) {
   if (!value) return undefined;
-  var date = new Date(value);
+  var str = String(value);
+  // Date-time strings without a timezone designator (e.g. "2026-07-08T08:00:00")
+  // are parsed using the server's local timezone by the JS Date constructor,
+  // which silently shifts the wall-clock time the admin entered whenever the
+  // server isn't running in UTC. Treat them as UTC instead so the value the
+  // admin typed round-trips unchanged regardless of server timezone.
+  if (/T\d{2}:\d{2}/.test(str) && !/[Zz]$|[+-]\d{2}:\d{2}$/.test(str)) {
+    str += "Z";
+  }
+  var date = new Date(str);
   return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
@@ -153,32 +169,61 @@ function parseMaybeJson(value, fallback) {
 
 function extractTournamentBanner(req) {
   if (req.file) {
-    return uploadBufferToCloudinary(
-      req.file,
-      "horse-racing/tournaments",
-    ).then(function (uploaded) {
-      return uploaded ? uploaded.secure_url || uploaded.url || "" : "";
-    });
+    return uploadBufferToCloudinary(req.file, "horse-racing/tournaments").then(
+      function (uploaded) {
+        return uploaded ? uploaded.secure_url || uploaded.url || "" : "";
+      },
+    );
   }
-  return Promise.resolve(req.body.banner || "");
+  return Promise.resolve(req.body.banner || req.body.bannerUrl || "");
 }
 
-function isCloudinaryError(error) {
-  var message = String(error && error.message ? error.message : error);
-  return (
-    message.indexOf("Cloudinary is not configured") !== -1 ||
-    message.indexOf("Invalid cloud_name") !== -1 ||
-    message.toLowerCase().indexOf("cloudinary") !== -1
-  );
-}
+var LEGACY_PRIZE_RANKS = {
+  first: { rank: 1, itemName: "Giải nhất" },
+  second: { rank: 2, itemName: "Giải nhì" },
+  third: { rank: 3, itemName: "Giải ba" },
+};
 
 function mapPrizes(prizes) {
-  prizes = prizes || {};
-  return {
-    first: prizes.first || 0,
-    second: prizes.second || 0,
-    third: prizes.third || 0,
-  };
+  if (Array.isArray(prizes)) {
+    return prizes.map(function (prize, index) {
+      return {
+        id: prize.id || "prize-" + (prize.rank || index + 1) + "-" + index,
+        rank: Number(prize.rank || index + 1),
+        itemName: prize.itemName || "Giải " + (prize.rank || index + 1),
+        amount: Number(prize.amount || 0),
+      };
+    });
+  }
+
+  if (prizes && typeof prizes === "object") {
+    return Object.keys(LEGACY_PRIZE_RANKS)
+      .filter(function (key) {
+        return Number(prizes[key]) > 0;
+      })
+      .map(function (key) {
+        var meta = LEGACY_PRIZE_RANKS[key];
+        return {
+          id: "prize-" + meta.rank,
+          rank: meta.rank,
+          itemName: meta.itemName,
+          amount: Number(prizes[key]),
+        };
+      });
+  }
+
+  return [];
+}
+
+function buildPrizesFromBody(rawPrizes) {
+  if (!Array.isArray(rawPrizes)) return [];
+  return rawPrizes.map(function (prize, index) {
+    return {
+      rank: toNumber(prize.rank, index + 1),
+      itemName: prize.itemName || prize.name || "Giải " + toNumber(prize.rank, index + 1),
+      amount: toNumber(prize.amount, 0),
+    };
+  });
 }
 
 function mapResult(result) {
@@ -195,23 +240,35 @@ function mapResult(result) {
 }
 
 function mapRace(race) {
+  var statusCode = toRaceStatusCode(race.status);
   return {
     id: String(race._id),
     raceNumber: race.raceNumber,
     name: race.name,
     distance: race.distance,
     scheduledAt: race.scheduledAt || null,
-    status: race.status,
+    scheduledStartAt: race.scheduledAt || null,
+    scheduledEndAt: race.scheduledEndAt || null,
+    status: statusCode,
+    statusCode: statusCode,
+    statusLabel: race.status || RACE_STATUS_LABELS[statusCode] || "",
     description: race.description || "",
+    note: race.description || "",
     track: race.track || "",
+    venueId: race.venueId || "",
+    venueName: race.venueName || "",
+    venueAddress: race.venueAddress || "",
     surface: race.surface || "Cỏ",
     category: race.category || "Open",
     minHorses: race.minHorses || 0,
     maxHorses: race.maxHorses || 0,
+    minParticipants: race.minHorses || 0,
+    maxParticipants: race.maxHorses || 0,
     entryFee: race.entryFee || 0,
     deposit: race.deposit || 0,
     regDeadline: race.regDeadline || null,
     checkIn: race.checkIn || "",
+    refereeId: race.refereeId ? String(race.refereeId) : null,
     prizes: mapPrizes(race.prizes),
     results: (race.results || []).map(mapResult),
   };
@@ -589,6 +646,8 @@ async function buildOwnerRaceOptions(tournament, race, ownerId) {
 }
 
 function mapTournament(tournament) {
+  var config = tournament.config || {};
+  var statusCode = toTournamentStatusCode(tournament.status);
   return {
     id: String(tournament._id),
     slug: tournament.slug,
@@ -597,11 +656,51 @@ function mapTournament(tournament) {
     location: tournament.location,
     banner: tournament.banner || "",
     type: tournament.type,
-    status: tournament.status,
+    bannerUrl: tournament.banner || "",
+    status: statusCode,
+    statusCode: statusCode,
+    statusLabel: tournament.status,
     startDate: tournament.startDate || null,
     endDate: tournament.endDate || null,
+    startAt: tournament.startDate || null,
+    endAt: tournament.endDate || null,
+    provinceId: tournament.provinceId ? String(tournament.provinceId) : null,
+    registrationOpenAt: tournament.registrationOpenAt || null,
+    checkInDeadlineAt:
+      tournament.checkInDeadlineAt || config.deadlineAt || null,
+    minTeams: Number(tournament.minTeams ?? 1),
+    maxTeams: Number(tournament.maxTeams ?? 0),
+    minHorsesPerOwner: Number(tournament.minHorsesPerOwner ?? 4),
+    maxHorsesPerOwner: Number(tournament.maxHorsesPerOwner ?? 10),
+    jockeyChallengeEnabled: Boolean(tournament.jockeyChallengeEnabled),
+    jockeyChallengeFirstPoints: Number(
+      tournament.jockeyChallengeFirstPoints ?? 3,
+    ),
+    jockeyChallengeSecondPoints: Number(
+      tournament.jockeyChallengeSecondPoints ?? 2,
+    ),
+    jockeyChallengeThirdPoints: Number(
+      tournament.jockeyChallengeThirdPoints ?? 1,
+    ),
+    jockeyChallengePrizes: (tournament.jockeyChallengePrizes || []).map(
+      function (prize) {
+        return {
+          rank: Number(prize.rank || 0),
+          amount: Number(prize.amount || 0),
+          note: prize.note || "",
+        };
+      },
+    ),
     rules: tournament.rules || "",
-    config: tournament.config || {},
+    config: config,
+    deadlineAt: config.deadlineAt || tournament.startDate || null,
+    registrationDeadline: config.deadlineAt || tournament.startDate || null,
+    registrationCloseAt: config.deadlineAt || tournament.startDate || null,
+    registrationFee: Number(config.entryFee || 0),
+    depositFee: Number(config.depositFee || 0),
+    maxRegistrations: Number(config.maxRegistrations || 0),
+    requireJockey: Boolean(config.requireJockey !== false),
+    requireHorseOwner: Boolean(config.requireHorseOwner !== false),
     races: (tournament.races || []).map(mapRace),
     registrations: (tournament.registrations || []).map(mapRegistration),
     raceCount: (tournament.races || []).length,
@@ -609,6 +708,70 @@ function mapTournament(tournament) {
     createdAt: tournament.createdAt,
     updatedAt: tournament.updatedAt,
   };
+}
+
+function applyTournamentSettingsFields(tournament, body) {
+  if (body.provinceId !== undefined) {
+    tournament.provinceId = mongoose.Types.ObjectId.isValid(body.provinceId)
+      ? body.provinceId
+      : null;
+  }
+  if (body.registrationOpenAt !== undefined) {
+    tournament.registrationOpenAt = toDate(body.registrationOpenAt);
+  }
+  if (body.checkInDeadlineAt !== undefined) {
+    tournament.checkInDeadlineAt = toDate(body.checkInDeadlineAt);
+  }
+  if (body.minTeams !== undefined) {
+    tournament.minTeams = toNumber(body.minTeams, tournament.minTeams);
+  }
+  if (body.maxTeams !== undefined) {
+    tournament.maxTeams = toNumber(body.maxTeams, tournament.maxTeams);
+  }
+  if (body.minHorsesPerOwner !== undefined) {
+    tournament.minHorsesPerOwner = toNumber(
+      body.minHorsesPerOwner,
+      tournament.minHorsesPerOwner,
+    );
+  }
+  if (body.maxHorsesPerOwner !== undefined) {
+    tournament.maxHorsesPerOwner = toNumber(
+      body.maxHorsesPerOwner,
+      tournament.maxHorsesPerOwner,
+    );
+  }
+  if (body.jockeyChallengeEnabled !== undefined) {
+    tournament.jockeyChallengeEnabled = Boolean(body.jockeyChallengeEnabled);
+  }
+  if (body.jockeyChallengeFirstPoints !== undefined) {
+    tournament.jockeyChallengeFirstPoints = toNumber(
+      body.jockeyChallengeFirstPoints,
+      tournament.jockeyChallengeFirstPoints,
+    );
+  }
+  if (body.jockeyChallengeSecondPoints !== undefined) {
+    tournament.jockeyChallengeSecondPoints = toNumber(
+      body.jockeyChallengeSecondPoints,
+      tournament.jockeyChallengeSecondPoints,
+    );
+  }
+  if (body.jockeyChallengeThirdPoints !== undefined) {
+    tournament.jockeyChallengeThirdPoints = toNumber(
+      body.jockeyChallengeThirdPoints,
+      tournament.jockeyChallengeThirdPoints,
+    );
+  }
+  if (Array.isArray(body.jockeyChallengePrizes)) {
+    tournament.jockeyChallengePrizes = body.jockeyChallengePrizes.map(
+      function (prize, index) {
+        return {
+          rank: toNumber(prize.rank, index + 1),
+          amount: toNumber(prize.amount, 0),
+          note: prize.note || "",
+        };
+      },
+    );
+  }
 }
 
 function findTournamentByIdOrSlug(identifier) {
@@ -632,30 +795,82 @@ function getRaceDefaults(tournament) {
   };
 }
 
-function buildRacePayload(body, fallbackRaceNumber, defaults) {
-  var prizes = body.prizes || {};
+async function resolveVenueInfo(venueId) {
+  if (!venueId) return { venueId: "", venueName: "", venueAddress: "" };
+
+  var province = await Province.findOne({ "venues._id": venueId }).exec();
+  var venue = province ? province.venues.id(venueId) : null;
+
+  if (!venue) return { venueId: String(venueId), venueName: "", venueAddress: "" };
+
+  return {
+    venueId: String(venue._id),
+    venueName: venue.name || "",
+    venueAddress: venue.address || "",
+  };
+}
+
+async function applyRaceFieldsUpdate(race, body) {
+  if (body.name !== undefined) race.name = body.name;
+  if (body.raceNumber !== undefined)
+    race.raceNumber = toNumber(body.raceNumber, race.raceNumber);
+  if (body.distance !== undefined) race.distance = String(body.distance);
+  var scheduledStart = body.scheduledStartAt ?? body.scheduledAt;
+  if (scheduledStart !== undefined) race.scheduledAt = toDate(scheduledStart);
+  if (body.scheduledEndAt !== undefined)
+    race.scheduledEndAt = toDate(body.scheduledEndAt);
+  if (body.status !== undefined)
+    race.status = toRaceStatusLabel(body.status, race.status);
+  var description = body.description ?? body.note;
+  if (description !== undefined) race.description = description;
+  if (body.track !== undefined) race.track = body.track;
+  if (body.venueId !== undefined) {
+    var venueInfo = await resolveVenueInfo(body.venueId);
+    race.venueId = venueInfo.venueId;
+    race.venueName = venueInfo.venueName;
+    race.venueAddress = venueInfo.venueAddress;
+  }
+  if (body.surface !== undefined) race.surface = body.surface;
+  if (body.category !== undefined) race.category = body.category;
+  var minCount = body.minHorses ?? body.minParticipants;
+  if (minCount !== undefined) race.minHorses = toNumber(minCount, race.minHorses);
+  var maxCount = body.maxHorses ?? body.maxParticipants;
+  if (maxCount !== undefined) race.maxHorses = toNumber(maxCount, race.maxHorses);
+  if (body.entryFee !== undefined)
+    race.entryFee = toNumber(body.entryFee, race.entryFee);
+  if (body.deposit !== undefined) race.deposit = toNumber(body.deposit, race.deposit);
+  if (body.regDeadline !== undefined) race.regDeadline = toDate(body.regDeadline);
+  if (body.checkIn !== undefined) race.checkIn = body.checkIn;
+  if (body.prizes !== undefined) race.prizes = buildPrizesFromBody(body.prizes);
+}
+
+async function buildRacePayload(body, fallbackRaceNumber, defaults) {
   defaults = defaults || {};
+  var venueInfo = body.venueId
+    ? await resolveVenueInfo(body.venueId)
+    : { venueId: "", venueName: "", venueAddress: "" };
+
   return {
     raceNumber: toNumber(body.raceNumber, fallbackRaceNumber),
     name: body.name || `Cuộc đua ${fallbackRaceNumber}`,
-    distance: toNumber(body.distance, 0),
-    scheduledAt: toDate(body.scheduledAt) || defaults.scheduledAt,
-    status: body.status || "Nháp",
-    description: body.description || "",
+    distance: body.distance != null ? String(body.distance) : "",
+    scheduledAt: toDate(body.scheduledStartAt ?? body.scheduledAt) || defaults.scheduledAt,
+    scheduledEndAt: toDate(body.scheduledEndAt) || undefined,
+    status: toRaceStatusLabel(body.status, "Nháp"),
+    description: body.description || body.note || "",
     track: body.track || defaults.track || "",
+    venueId: venueInfo.venueId,
+    venueName: venueInfo.venueName,
+    venueAddress: venueInfo.venueAddress,
     surface: body.surface || "Cỏ",
     category: body.category || "Open",
-    minHorses: toNumber(body.minHorses, 0),
-    maxHorses: toNumber(body.maxHorses, defaults.maxHorses || 0),
+    minHorses: toNumber(body.minHorses ?? body.minParticipants, 0),
+    maxHorses: toNumber(body.maxHorses ?? body.maxParticipants, defaults.maxHorses || 0),
     entryFee: toNumber(body.entryFee, defaults.entryFee || 0),
     deposit: toNumber(body.deposit, defaults.deposit || 0),
     regDeadline: toDate(body.regDeadline) || defaults.regDeadline,
     checkIn: body.checkIn || defaults.checkIn || "",
-    prizes: {
-      first: toNumber(prizes.first, 0),
-      second: toNumber(prizes.second, 0),
-      third: toNumber(prizes.third, 0),
-    },
+    prizes: buildPrizesFromBody(body.prizes),
   };
 }
 
@@ -666,7 +881,7 @@ router.get("/", async function (req, res, next) {
     var type = (req.query.type || "").trim();
     var search = (req.query.search || "").trim();
 
-    if (status) query.status = status;
+    if (status) query.status = toTournamentStatusLabel(status, status);
     if (type) query.type = type;
     if (search) {
       query.$or = [
@@ -846,6 +1061,78 @@ router.get(
   },
 );
 
+router.put(
+  "/:identifier/status",
+  authenticate,
+  requireRole("ADMIN"),
+  async function (req, res, next) {
+    try {
+      var tournament = await findTournamentByIdOrSlug(
+        req.params.identifier,
+      ).exec();
+
+      if (!tournament) {
+        return fail(res, 404, "Không tìm thấy giải đấu");
+      }
+
+      var statusValue = req.query.status || req.body.status;
+      if (!statusValue) {
+        return fail(res, 400, "Vui lòng chọn trạng thái giải đấu");
+      }
+
+      var nextStatusCode = toTournamentStatusCode(statusValue);
+      tournament.status = toTournamentStatusLabel(
+        statusValue,
+        tournament.status,
+      );
+
+      if (nextStatusCode === "ONGOING") {
+        (tournament.races || []).forEach(function (race) {
+          var raceCode = toRaceStatusCode(race.status);
+          if (raceCode === "DRAFT" || raceCode === "SCHEDULED") {
+            race.status = RACE_STATUS_LABELS.ONGOING;
+          }
+        });
+      }
+
+      await tournament.save();
+      res.json(mapTournament(tournament));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.put(
+  "/:identifier/schedule",
+  authenticate,
+  requireRole("ADMIN"),
+  async function (req, res, next) {
+    try {
+      var tournament = await findTournamentByIdOrSlug(
+        req.params.identifier,
+      ).exec();
+
+      if (!tournament) {
+        return fail(res, 404, "Không tìm thấy giải đấu");
+      }
+
+      tournament.status = TOURNAMENT_STATUS_LABELS.SCHEDULED;
+      (tournament.races || []).forEach(function (race) {
+        var raceCode = toRaceStatusCode(race.status);
+        if (raceCode === "DRAFT" || raceCode === "SCHEDULED") {
+          race.status = RACE_STATUS_LABELS.SCHEDULED;
+        }
+      });
+
+      await tournament.save();
+      res.json(mapTournament(tournament));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 router.get("/:identifier", async function (req, res, next) {
   try {
     var tournament = await findTournamentByIdOrSlug(
@@ -857,6 +1144,56 @@ router.get("/:identifier", async function (req, res, next) {
     }
 
     res.json(mapTournament(tournament));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get("/:identifier/venues", async function (req, res, next) {
+  try {
+    var tournament = await findTournamentByIdOrSlug(
+      req.params.identifier,
+    ).exec();
+
+    if (!tournament) {
+      return fail(res, 404, "Không tìm thấy giải đấu");
+    }
+
+    var province = null;
+    if (tournament.provinceId) {
+      province = await Province.findById(tournament.provinceId).exec();
+    }
+
+    if (!province) {
+      var location = String(tournament.location || "").trim().toLowerCase();
+      if (location) {
+        var candidates = await Province.find({ active: true }).exec();
+        province = candidates.find(function (item) {
+          var name = String(item.name || "").trim().toLowerCase();
+          var code = String(item.code || "").trim().toLowerCase();
+          return (
+            name === location ||
+            code === location ||
+            name.indexOf(location) !== -1 ||
+            location.indexOf(name) !== -1
+          );
+        }) || null;
+      }
+    }
+
+    if (!province) {
+      return res.json([]);
+    }
+
+    res.json(
+      (province.venues || [])
+        .filter(function (venue) {
+          return venue.active !== false;
+        })
+        .map(function (venue) {
+          return mapVenue(venue, province);
+        }),
+    );
   } catch (err) {
     next(err);
   }
@@ -889,21 +1226,32 @@ router.post(
 
       var banner = await extractTournamentBanner(req);
       var config = parseMaybeJson(req.body.config, {});
+      if (req.body.entryFee !== undefined) {
+        config.entryFee = toNumber(req.body.entryFee, config.entryFee || 0);
+      }
+      if (req.body.depositFee !== undefined) {
+        config.depositFee = toNumber(req.body.depositFee, config.depositFee || 0);
+      }
+      if (req.body.registrationCloseAt !== undefined) {
+        config.deadlineAt = toDate(req.body.registrationCloseAt);
+      }
 
-      var tournament = await Tournament.create({
+      var tournament = new Tournament({
         name: name,
         slug: slug,
         description: req.body.description || "",
         location: location,
         banner: banner,
         type: req.body.type || "regular",
-        status: req.body.status || "Nháp",
-        startDate: toDate(req.body.startDate),
-        endDate: toDate(req.body.endDate),
+        status: toTournamentStatusLabel(req.body.status, "Nháp"),
+        startDate: toDate(req.body.startAt || req.body.startDate),
+        endDate: toDate(req.body.endAt || req.body.endDate),
         rules: req.body.rules || "",
         config: config,
         createdBy: req.user.id,
       });
+      applyTournamentSettingsFields(tournament, req.body);
+      await tournament.save();
 
       res.status(201).json(mapTournament(tournament));
     } catch (err) {
@@ -950,7 +1298,11 @@ router.patch(
         tournament.banner = await extractTournamentBanner(req);
       }
       if (req.body.type !== undefined) tournament.type = req.body.type;
-      if (req.body.status !== undefined) tournament.status = req.body.status;
+      if (req.body.status !== undefined)
+        tournament.status = toTournamentStatusLabel(
+          req.body.status,
+          tournament.status,
+        );
       if (req.body.startDate !== undefined)
         tournament.startDate = toDate(req.body.startDate);
       if (req.body.endDate !== undefined)
@@ -984,6 +1336,108 @@ router.patch(
   },
 );
 
+router.put(
+  "/:identifier",
+  authenticate,
+  requireRole("ADMIN"),
+  async function (req, res, next) {
+    try {
+      var tournament = await findTournamentByIdOrSlug(
+        req.params.identifier,
+      ).exec();
+
+      if (!tournament) {
+        return fail(res, 404, "Không tìm thấy giải đấu");
+      }
+
+      if (req.body.name !== undefined) {
+        tournament.name = String(req.body.name).trim() || tournament.name;
+      }
+      if (req.body.description !== undefined)
+        tournament.description = req.body.description;
+      if (req.body.location !== undefined) tournament.location = req.body.location;
+      if (req.body.banner !== undefined || req.body.bannerUrl !== undefined) {
+        tournament.banner = req.body.banner || req.body.bannerUrl || "";
+      }
+      if (req.body.type !== undefined) tournament.type = req.body.type;
+      if (req.body.status !== undefined) {
+        tournament.status = toTournamentStatusLabel(
+          req.body.status,
+          tournament.status,
+        );
+      }
+      if (req.body.startDate !== undefined || req.body.startAt !== undefined) {
+        tournament.startDate = toDate(req.body.startAt || req.body.startDate);
+      }
+      if (req.body.endDate !== undefined || req.body.endAt !== undefined) {
+        tournament.endDate = toDate(req.body.endAt || req.body.endDate);
+      }
+      if (req.body.rules !== undefined) tournament.rules = req.body.rules;
+
+      var currentConfig = tournament.config && tournament.config.toObject
+        ? tournament.config.toObject()
+        : tournament.config || {};
+      var nextConfig = Object.assign({}, currentConfig);
+
+      if (req.body.registrationCloseAt !== undefined) {
+        nextConfig.deadlineAt = toDate(req.body.registrationCloseAt);
+      }
+      if (req.body.entryFee !== undefined) {
+        nextConfig.entryFee = toNumber(req.body.entryFee, nextConfig.entryFee || 0);
+      }
+      if (req.body.depositFee !== undefined) {
+        nextConfig.depositFee = toNumber(
+          req.body.depositFee,
+          nextConfig.depositFee || 0,
+        );
+      }
+      if (req.body.config) {
+        nextConfig = Object.assign(
+          nextConfig,
+          parseMaybeJson(req.body.config, req.body.config),
+        );
+      }
+      tournament.config = nextConfig;
+      applyTournamentSettingsFields(tournament, req.body);
+
+      await tournament.save();
+      res.json(mapTournament(tournament));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.delete(
+  "/:identifier",
+  authenticate,
+  requireRole("ADMIN"),
+  async function (req, res, next) {
+    try {
+      var tournament = await findTournamentByIdOrSlug(
+        req.params.identifier,
+      ).exec();
+
+      if (!tournament) {
+        return fail(res, 404, "Không tìm thấy giải đấu");
+      }
+
+      if ((tournament.registrations || []).length > 0) {
+        return fail(
+          res,
+          409,
+          "Không thể xóa giải đấu đã có đội đăng ký",
+        );
+      }
+
+      await tournament.deleteOne();
+      res.json({ success: true, message: "Xóa giải đấu thành công", data: null });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 router.patch(
   "/:identifier/config",
   authenticate,
@@ -999,7 +1453,10 @@ router.patch(
       }
 
       tournament.type = req.body.type || tournament.type;
-      tournament.status = req.body.status || tournament.status;
+      tournament.status =
+        req.body.status !== undefined
+          ? toTournamentStatusLabel(req.body.status, tournament.status)
+          : tournament.status;
       tournament.rules =
         req.body.rules !== undefined ? req.body.rules : tournament.rules;
       tournament.config = Object.assign(
@@ -1083,15 +1540,51 @@ router.post(
         req.body.raceNumber || tournament.races.length + 1,
       );
 
-      tournament.races.push(
-        Object.assign(
-          buildRacePayload(req.body, raceNumber, getRaceDefaults(tournament)),
-          { results: [] },
-        ),
+      var newRacePayload = await buildRacePayload(
+        req.body,
+        raceNumber,
+        getRaceDefaults(tournament),
       );
+      tournament.races.push(Object.assign(newRacePayload, { results: [] }));
 
       await tournament.save();
       res.status(201).json(mapTournament(tournament));
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.put(
+  "/:identifier/races",
+  authenticate,
+  requireRole("ADMIN"),
+  async function (req, res, next) {
+    try {
+      var tournament = await findTournamentByIdOrSlug(
+        req.params.identifier,
+      ).exec();
+
+      if (!tournament) {
+        return fail(res, 404, "Không tìm thấy giải đấu");
+      }
+
+      var races = Array.isArray(req.body) ? req.body : req.body.races;
+      if (!Array.isArray(races)) {
+        return fail(res, 400, "Danh sách cuộc đua không hợp lệ");
+      }
+
+      var defaults = getRaceDefaults(tournament);
+      var nextRaces = await Promise.all(
+        races.map(async function (race, index) {
+          var payload = await buildRacePayload(race, index + 1, defaults);
+          return Object.assign(payload, { results: [] });
+        }),
+      );
+      tournament.races = nextRaces;
+
+      await tournament.save();
+      res.json(mapTournament(tournament));
     } catch (err) {
       next(err);
     }
@@ -1138,38 +1631,7 @@ router.patch(
         return fail(res, 404, "Không tìm thấy cuộc đua");
       }
 
-      if (req.body.name !== undefined) race.name = req.body.name;
-      if (req.body.raceNumber !== undefined)
-        race.raceNumber = toNumber(req.body.raceNumber, race.raceNumber);
-      if (req.body.distance !== undefined)
-        race.distance = toNumber(req.body.distance, race.distance);
-      if (req.body.scheduledAt !== undefined)
-        race.scheduledAt = toDate(req.body.scheduledAt);
-      if (req.body.status !== undefined) race.status = req.body.status;
-      if (req.body.description !== undefined)
-        race.description = req.body.description;
-      if (req.body.track !== undefined) race.track = req.body.track;
-      if (req.body.surface !== undefined) race.surface = req.body.surface;
-      if (req.body.category !== undefined) race.category = req.body.category;
-      if (req.body.minHorses !== undefined)
-        race.minHorses = toNumber(req.body.minHorses, race.minHorses);
-      if (req.body.maxHorses !== undefined)
-        race.maxHorses = toNumber(req.body.maxHorses, race.maxHorses);
-      if (req.body.entryFee !== undefined)
-        race.entryFee = toNumber(req.body.entryFee, race.entryFee);
-      if (req.body.deposit !== undefined)
-        race.deposit = toNumber(req.body.deposit, race.deposit);
-      if (req.body.regDeadline !== undefined)
-        race.regDeadline = toDate(req.body.regDeadline);
-      if (req.body.checkIn !== undefined) race.checkIn = req.body.checkIn;
-      if (req.body.prizes) {
-        var currentPrizes = mapPrizes(race.prizes);
-        race.prizes = Object.assign(currentPrizes, {
-          first: toNumber(req.body.prizes.first, currentPrizes.first),
-          second: toNumber(req.body.prizes.second, currentPrizes.second),
-          third: toNumber(req.body.prizes.third, currentPrizes.third),
-        });
-      }
+      await applyRaceFieldsUpdate(race, req.body);
 
       await tournament.save();
       res.json(mapTournament(tournament));
@@ -1274,7 +1736,10 @@ router.post(
         return fail(res, 400, "Ngựa không đủ điều kiện thi đấu");
       }
 
-      var ageRestriction = getHorseAgeRestriction(horse, getRaceStartDate(tournament, race));
+      var ageRestriction = getHorseAgeRestriction(
+        horse,
+        getRaceStartDate(tournament, race),
+      );
       if (ageRestriction) {
         return res.status(400).json({ error: ageRestriction });
       }
@@ -1419,8 +1884,11 @@ router.post(
           notes: item.notes || "",
         };
       });
-      race.status = req.body.status || "Hoàn thành";
-      tournament.status = req.body.tournamentStatus || tournament.status;
+      race.status = toRaceStatusLabel(req.body.status, "Hoàn thành");
+      tournament.status =
+        req.body.tournamentStatus !== undefined
+          ? toTournamentStatusLabel(req.body.tournamentStatus, tournament.status)
+          : tournament.status;
 
       await tournament.save();
       res.json(mapTournament(tournament));
@@ -1454,3 +1922,5 @@ router.get("/:identifier/results", async function (req, res, next) {
 });
 
 module.exports = router;
+module.exports.mapTournament = mapTournament;
+module.exports.applyRaceFieldsUpdate = applyRaceFieldsUpdate;

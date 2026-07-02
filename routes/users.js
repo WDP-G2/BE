@@ -3,11 +3,21 @@ var router = express.Router();
 var bcrypt = require("bcryptjs");
 var jwt = require("jsonwebtoken");
 var mongoose = require("mongoose");
+var multer = require("multer");
 var User = require("../models/user");
 var Tournament = require("../models/tournament");
 var JockeyInvitation = require("../models/jockeyInvitation");
 var { authenticate, requireRole } = require("../middleware/auth");
 var { fail, ok } = require("../utils/httpErrors");
+var {
+  uploadBufferToCloudinary,
+  isCloudinaryError,
+} = require("../utils/cloudinaryUpload");
+
+var avatarUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 },
+});
 
 var JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 var JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
@@ -392,6 +402,45 @@ router.get("/me", async function (req, res, next) {
     return fail(res, 401, "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại");
   }
 });
+
+router.get("/me/profile", authenticate, async function (req, res, next) {
+  try {
+    var user = await User.findById(req.user.id).exec();
+    if (!user) return fail(res, 401, "Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại");
+    res.json(toPublicUser(user));
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.put(
+  "/me/profile",
+  authenticate,
+  avatarUpload.single("avatar"),
+  async function (req, res, next) {
+    try {
+      var user = await User.findById(req.user.id).exec();
+      if (!user) return fail(res, 401, "Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại");
+
+      if (req.body.fullName !== undefined) user.fullName = req.body.fullName;
+      if (req.body.phone !== undefined) user.phone = req.body.phone;
+      if (req.body.location !== undefined) user.location = req.body.location;
+
+      if (req.file) {
+        var uploaded = await uploadBufferToCloudinary(req.file, "horse-racing/avatars");
+        user.avatarUrl = uploaded ? uploaded.secure_url || uploaded.url || "" : user.avatarUrl;
+      }
+
+      await user.save();
+      res.json(toPublicUser(user));
+    } catch (err) {
+      if (isCloudinaryError(err)) {
+        return res.status(400).json({ error: String(err.message || err) });
+      }
+      next(err);
+    }
+  },
+);
 
 router.get("/:id", async function (req, res, next) {
   try {

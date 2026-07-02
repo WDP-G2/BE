@@ -115,7 +115,11 @@ function uploadBufferToCloudinary(file, folder) {
 async function uploadHorseAssets(req) {
   var imageFile = req.files && req.files.image ? req.files.image[0] : null;
   var licenseFile =
-    req.files && req.files.licenseImage ? req.files.licenseImage[0] : null;
+    req.files && req.files.licenseImage
+      ? req.files.licenseImage[0]
+      : req.files && req.files.document
+        ? req.files.document[0]
+        : null;
 
   var image = null;
   var license = null;
@@ -200,19 +204,31 @@ function toDate(value) {
 }
 
 function mapHorse(doc) {
+  var statusCode = doc.approvalStatus || "APPROVED";
   return {
     id: String(doc._id),
     slug: doc.slug,
     name: doc.name,
     breed: doc.breed || "",
     gender: doc.gender || "",
+    age: Number(doc.age || 0),
+    color: doc.color || "",
+    heightCm: Number(doc.heightCm || 0),
+    weightKg: Number(doc.weightKg || 0),
     birthDate: doc.birthDate || null,
     ownerName: doc.ownerName || "",
+    ownerUsername: doc.ownerName || "",
+    ownerId: doc.ownerId ? String(doc.ownerId) : "",
     imageUrl: doc.imageUrl || "",
     imagePublicId: doc.imagePublicId || "",
     licenseImageUrl: doc.licenseImageUrl || "",
+    documentUrl: doc.licenseImageUrl || "",
     licenseImagePublicId: doc.licenseImagePublicId || "",
     healthStatus: doc.healthStatus || "Chưa cập nhật",
+    approvalStatus: statusCode,
+    status: statusCode,
+    statusCode: statusCode,
+    reviewReason: doc.notes || "",
     wins: Number(doc.wins || 0),
     races: Number(doc.races || 0),
     achievements: Array.isArray(doc.achievements) ? doc.achievements : [],
@@ -238,7 +254,10 @@ function isOwner(user) {
 function canManageHorse(req, horse) {
   if (isAdmin(req.user)) return true;
   if (!isOwner(req.user)) return false;
-  return String(horse.createdBy || "") === String(req.user.id || "");
+  return (
+    String(horse.createdBy || "") === String(req.user.id || "") ||
+    String(horse.ownerId || "") === String(req.user.id || "")
+  );
 }
 
 function getOwnerDisplayName(user) {
@@ -289,6 +308,10 @@ function parseMultipartHorse(req) {
     name: String(body.name || "").trim(),
     breed: String(body.breed || "").trim(),
     gender: String(body.gender || "").trim(),
+    age: body.age !== undefined ? Number(body.age) : undefined,
+    color: String(body.color || "").trim(),
+    heightCm: body.heightCm !== undefined ? Number(body.heightCm) : undefined,
+    weightKg: body.weightKg !== undefined ? Number(body.weightKg) : undefined,
     birthDate: toDate(body.birthDate),
     ownerName: String(body.ownerName || "").trim(),
     healthStatus: String(body.healthStatus || "").trim(),
@@ -393,6 +416,7 @@ router.post(
   upload.fields([
     { name: "image", maxCount: 1 },
     { name: "licenseImage", maxCount: 1 },
+    { name: "document", maxCount: 1 },
   ]),
   async function (req, res, next) {
     var assets = null;
@@ -419,10 +443,16 @@ router.post(
         name: name,
         breed: payload.breed,
         gender: payload.gender,
+        age: Number.isFinite(payload.age) ? payload.age : 0,
+        color: payload.color,
+        heightCm: Number.isFinite(payload.heightCm) ? payload.heightCm : 0,
+        weightKg: Number.isFinite(payload.weightKg) ? payload.weightKg : 0,
         birthDate: payload.birthDate,
         ownerName: isOwner(req.user)
           ? getOwnerDisplayName(req.user)
           : payload.ownerName,
+        ownerId: isOwner(req.user) ? req.user.id : undefined,
+        approvalStatus: isOwner(req.user) ? "PENDING" : "APPROVED",
         imageUrl: assets.imageUrl || "",
         imagePublicId: assets.imagePublicId || "",
         licenseImageUrl: assets.licenseImageUrl || "",
@@ -467,6 +497,7 @@ router.patch(
   upload.fields([
     { name: "image", maxCount: 1 },
     { name: "licenseImage", maxCount: 1 },
+    { name: "document", maxCount: 1 },
   ]),
   async function (req, res, next) {
     var assets = null;
@@ -502,6 +533,10 @@ router.patch(
       if (payload.breed !== undefined) horse.breed = payload.breed;
       if (payload.gender !== undefined) horse.gender = payload.gender;
       if (payload.birthDate !== undefined) horse.birthDate = payload.birthDate;
+      if (Number.isFinite(payload.age)) horse.age = payload.age;
+      if (payload.color !== undefined) horse.color = payload.color;
+      if (Number.isFinite(payload.heightCm)) horse.heightCm = payload.heightCm;
+      if (Number.isFinite(payload.weightKg)) horse.weightKg = payload.weightKg;
       if (isOwner(req.user)) {
         horse.ownerName = getOwnerDisplayName(req.user);
       } else if (payload.ownerName !== undefined) {
@@ -574,12 +609,13 @@ router.delete(
 
       var activeTournament = await findActiveHorseRegistration(horse._id);
       if (activeTournament) {
-        return res.status(409).json({
-          error:
+        return fail(
+          res,
+          409,
             'Không thể xóa ngựa đang có đăng ký trong giải "' +
             activeTournament.name +
             '".',
-        });
+        );
       }
 
       await Promise.all([

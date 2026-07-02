@@ -1,6 +1,7 @@
 var express = require("express");
 var router = express.Router();
 var Horse = require("../../models/horse");
+var User = require("../../models/user");
 var { authenticate, requireRole } = require("../../middleware/auth");
 var asyncHandler = require("../../utils/asyncHandler");
 var { apiSuccess, apiError } = require("../../utils/apiResponse");
@@ -14,26 +15,101 @@ var STATUS_LABELS = {
   SUSPENDED: "Tạm khóa",
 };
 
-function mapHorse(horse) {
+function calculateAge(horse) {
+  if (Number.isFinite(Number(horse.age)) && Number(horse.age) > 0) {
+    return Number(horse.age);
+  }
+
+  if (!horse.birthDate) return 0;
+  var birthDate = new Date(horse.birthDate);
+  if (Number.isNaN(birthDate.getTime())) return 0;
+
+  var now = new Date();
+  var age = now.getFullYear() - birthDate.getFullYear();
+  var monthDiff = now.getMonth() - birthDate.getMonth();
+  if (
+    monthDiff < 0 ||
+    (monthDiff === 0 && now.getDate() < birthDate.getDate())
+  ) {
+    age -= 1;
+  }
+  return Math.max(age, 0);
+}
+
+function getUserDisplayName(user) {
+  if (!user) return "";
+  return user.fullName || user.name || user.username || user.email || "";
+}
+
+function ownerKeyForHorse(horse) {
+  return horse.ownerId ? String(horse.ownerId) : horse.createdBy ? String(horse.createdBy) : "";
+}
+
+function mapHorse(horse, owner) {
+  var statusCode = horse.approvalStatus || "APPROVED";
+  var ownerId = ownerKeyForHorse(horse);
+  var ownerName = horse.ownerName || getUserDisplayName(owner);
   return {
     id: String(horse._id),
     name: horse.name,
     slug: horse.slug,
-    breed: horse.breed,
-    ownerName: horse.ownerName,
-    ownerId: horse.ownerId ? String(horse.ownerId) : null,
-    approvalStatus: horse.approvalStatus || "APPROVED",
-    status: STATUS_LABELS[horse.approvalStatus] || horse.approvalStatus,
-    statusCode: horse.approvalStatus || "APPROVED",
+    breed: horse.breed || "",
+    gender: horse.gender || "",
+    age: calculateAge(horse),
+    color: horse.color || "",
+    heightCm: Number(horse.heightCm || 0),
+    weightKg: Number(horse.weightKg || 0),
+    birthDate: horse.birthDate || null,
+    ownerName: ownerName,
+    ownerUsername: ownerName,
+    ownerId: ownerId || null,
+    createdBy: horse.createdBy ? String(horse.createdBy) : "",
+    updatedBy: horse.updatedBy ? String(horse.updatedBy) : "",
+    approvalStatus: statusCode,
+    status: statusCode,
+    statusCode: statusCode,
+    statusLabel: STATUS_LABELS[statusCode] || statusCode,
     reviewReason: horse.notes || "",
-    racingStatus: horse.racingStatus,
-    imageUrl: horse.imageUrl,
-    healthStatus: horse.healthStatus,
-    wins: horse.wins || 0,
-    races: horse.races || 0,
+    racingStatus: horse.racingStatus || "can-race",
+    canRace: horse.racingStatus !== "cannot-race",
+    imageUrl: horse.imageUrl || "",
+    imagePublicId: horse.imagePublicId || "",
+    documentUrl: horse.licenseImageUrl || "",
+    licenseImageUrl: horse.licenseImageUrl || "",
+    licenseImagePublicId: horse.licenseImagePublicId || "",
+    healthStatus: horse.healthStatus || "Chưa cập nhật",
+    wins: Number(horse.wins || 0),
+    races: Number(horse.races || 0),
+    achievements: Array.isArray(horse.achievements) ? horse.achievements : [],
+    history: Array.isArray(horse.history) ? horse.history : [],
     createdAt: horse.createdAt,
     updatedAt: horse.updatedAt,
   };
+}
+
+async function buildOwnerMap(horses) {
+  var ids = Array.from(
+    new Set(
+      (horses || [])
+        .map(ownerKeyForHorse)
+        .filter(Boolean),
+    ),
+  );
+
+  if (!ids.length) return {};
+
+  var users = await User.find({ _id: { $in: ids } }).exec();
+  return users.reduce(function (result, user) {
+    result[String(user._id)] = user;
+    return result;
+  }, {});
+}
+
+async function mapHorsesWithOwners(horses) {
+  var ownerById = await buildOwnerMap(horses);
+  return horses.map(function (horse) {
+    return mapHorse(horse, ownerById[ownerKeyForHorse(horse)]);
+  });
 }
 
 router.get(
@@ -42,7 +118,7 @@ router.get(
     var filter = {};
     if (req.query.status) filter.approvalStatus = String(req.query.status).toUpperCase();
     var horses = await Horse.find(filter).sort({ updatedAt: -1 }).exec();
-    res.json(apiSuccess(horses.map(mapHorse)));
+    res.json(apiSuccess(await mapHorsesWithOwners(horses)));
   }),
 );
 
@@ -55,7 +131,13 @@ router.put(
       { new: true },
     ).exec();
     if (!horse) throw apiError("Không tìm thấy ngựa", 404);
-    res.json(apiSuccess(mapHorse(horse), "Duyệt ngựa thành công"));
+    var ownerById = await buildOwnerMap([horse]);
+    res.json(
+      apiSuccess(
+        mapHorse(horse, ownerById[ownerKeyForHorse(horse)]),
+        "Duyệt ngựa thành công",
+      ),
+    );
   }),
 );
 
@@ -75,7 +157,13 @@ router.put(
       { new: true },
     ).exec();
     if (!horse) throw apiError("Không tìm thấy ngựa", 404);
-    res.json(apiSuccess(mapHorse(horse), "Từ chối ngựa thành công"));
+    var ownerById = await buildOwnerMap([horse]);
+    res.json(
+      apiSuccess(
+        mapHorse(horse, ownerById[ownerKeyForHorse(horse)]),
+        "Từ chối ngựa thành công",
+      ),
+    );
   }),
 );
 
@@ -95,7 +183,13 @@ router.put(
       { new: true },
     ).exec();
     if (!horse) throw apiError("Không tìm thấy ngựa", 404);
-    res.json(apiSuccess(mapHorse(horse), "Tạm ngưng ngựa thành công"));
+    var ownerById = await buildOwnerMap([horse]);
+    res.json(
+      apiSuccess(
+        mapHorse(horse, ownerById[ownerKeyForHorse(horse)]),
+        "Tạm ngưng ngựa thành công",
+      ),
+    );
   }),
 );
 

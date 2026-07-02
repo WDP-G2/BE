@@ -19,12 +19,15 @@ var JockeyInvitationSchema = new Schema(
     raceTime: { type: String, default: "" },
     location: { type: String, default: "" },
     reward: { type: Number, default: 0 },
+    message: { type: String, default: "" },
+    responseNote: { type: String, default: "" },
     status: {
       type: String,
-      enum: ["Chờ xử lý", "Đã chấp nhận", "Đã từ chối"],
+      enum: ["Chờ xử lý", "Đã chấp nhận", "Đã từ chối", "Đã hủy"],
       default: "Chờ xử lý",
     },
     respondedAt: { type: Date },
+    cancelledAt: { type: Date },
   },
   { timestamps: true },
 );

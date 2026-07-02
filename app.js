@@ -1,6 +1,7 @@
 var createError = require("http-errors");
-var express = require("express");
 var path = require("path");
+require("dotenv").config({ path: path.join(__dirname, ".env") });
+var express = require("express");
 var cookieParser = require("cookie-parser");
 var logger = require("morgan");
 
@@ -35,7 +36,7 @@ app.set("views", path.join(__dirname, "views"));
 app.set("view engine", "jade");
 
 app.use(logger("dev"));
-app.use(express.json({ limit: "12mb" }));
+app.use(express.json({ limit: "12mb", strict: false }));
 app.use(express.urlencoded({ extended: true, limit: "12mb" }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, "public")));
@@ -52,6 +53,25 @@ app.use(function (req, res, next) {
 });
 
 app.use("/", indexRouter);
+app.use("/users", usersRouter);
+app.use("/users", bettingRoutes.usersBettingRouter);
+app.use("/tournaments", tournamentsRouter);
+app.use("/tournaments", tournamentExtrasRouter);
+app.use("/news", newsRouter);
+app.use("/horses", horsesRouter);
+app.use("/invitations", invitationsRouter);
+app.use("/admin", adminRouter);
+app.use("/wallets", walletsRouter);
+app.use("/notifications", notificationsRouter);
+app.use("/spectator", spectatorRouter);
+app.use("/referee", refereeRouter);
+app.use("/owner", ownerRouter);
+app.use("/jockey", jockeyRouter);
+app.use("/jockeys", jockeysRouter);
+app.use("/role-applications", roleApplicationsRouter);
+app.use("/rankings", rankingsRouter);
+app.use("/bets", betsRouter);
+app.use("/races", bettingRoutes.racesRouter);
 
 var apiRouter = express.Router();
 apiRouter.use("/auth", authRouter);

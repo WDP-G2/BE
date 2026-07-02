@@ -7,6 +7,7 @@ var NewsSchema = new mongoose.Schema(
     summary: { type: String, default: "" },
     content: { type: String, default: "" },
     thumbnail: { type: String, default: "" },
+    imagePublicId: { type: String, default: "" },
     category: { type: String, default: "Tin tức" },
     status: {
       type: String,
