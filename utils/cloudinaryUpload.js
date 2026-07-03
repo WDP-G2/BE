@@ -78,6 +78,46 @@ function uploadBufferToCloudinary(file, folder, resourceType) {
   });
 }
 
+function destroyCloudinaryAsset(publicId, resourceType) {
+  if (!publicId) return Promise.resolve();
+
+  try {
+    requireCloudinaryConfig();
+  } catch (error) {
+    return Promise.reject(error);
+  }
+
+  var timestamp = Math.floor(Date.now() / 1000).toString();
+  var params = {
+    public_id: publicId,
+    timestamp: timestamp,
+  };
+  var signature = signCloudinaryParams(params);
+  var formData = new FormData();
+
+  formData.append("public_id", publicId);
+  formData.append("api_key", CLOUDINARY_API_KEY);
+  formData.append("timestamp", timestamp);
+  formData.append("signature", signature);
+
+  return fetch(
+    "https://api.cloudinary.com/v1_1/" +
+      encodeURIComponent(CLOUDINARY_CLOUD_NAME) +
+      "/" + (resourceType || "image") + "/destroy",
+    {
+      method: "POST",
+      body: formData,
+    },
+  ).then(function (response) {
+    return response.text().then(function (text) {
+      if (!response.ok) {
+        throw new Error(text || "Cloudinary delete failed");
+      }
+      return text ? JSON.parse(text) : {};
+    });
+  });
+}
+
 function isCloudinaryError(error) {
   var message = String(error && error.message ? error.message : error);
   return (
@@ -91,5 +131,6 @@ module.exports = {
   requireCloudinaryConfig: requireCloudinaryConfig,
   signCloudinaryParams: signCloudinaryParams,
   uploadBufferToCloudinary: uploadBufferToCloudinary,
+  destroyCloudinaryAsset: destroyCloudinaryAsset,
   isCloudinaryError: isCloudinaryError,
 };
