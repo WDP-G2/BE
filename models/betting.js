@@ -42,6 +42,9 @@ var BetSchema = new Schema(
   {
     marketId: { type: Schema.Types.ObjectId, ref: "BetMarket", required: true, index: true },
     raceId: { type: Schema.Types.ObjectId, required: true, index: true },
+    raceName: { type: String, default: "" },
+    tournamentId: { type: Schema.Types.ObjectId, ref: "Tournament" },
+    tournamentName: { type: String, default: "" },
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     username: { type: String, default: "" },
     participantId: { type: String, required: true },

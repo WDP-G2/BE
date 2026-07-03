@@ -10,29 +10,32 @@ router.get(
     var tournament = await Tournament.findById(req.params.id).exec();
     if (!tournament) throw apiError("Không tìm thấy giải đấu", 404);
 
-    var pointsByHorse = {};
+    var entries = [];
     (tournament.races || []).forEach(function (race) {
+      var prizeByRank = {};
+      (Array.isArray(race.prizes) ? race.prizes : []).forEach(function (prize) {
+        prizeByRank[Number(prize.rank)] = Number(prize.amount || 0);
+      });
+
       (race.results || []).forEach(function (result) {
-        var key = result.horseName;
-        if (!key) return;
-        if (!pointsByHorse[key]) {
-          pointsByHorse[key] = {
-            horseName: key,
-            jockeyName: result.jockeyName || "",
-            totalPoints: 0,
-            wins: 0,
-          };
-        }
-        pointsByHorse[key].totalPoints += Number(result.points || 0);
-        if (Number(result.position) === 1) pointsByHorse[key].wins += 1;
+        entries.push({
+          id: String(result._id),
+          raceId: String(race._id),
+          participantId: result.jockeyId ? String(result.jockeyId) : String(result._id),
+          raceRank: result.position,
+          horseName: result.horseName,
+          raceName: race.name,
+          jockeyUsername: result.jockeyName || "",
+          prizeAmount: prizeByRank[Number(result.position)] || 0,
+        });
       });
     });
 
-    var rows = Object.values(pointsByHorse).sort(function (a, b) {
-      return b.totalPoints - a.totalPoints || b.wins - a.wins;
+    entries.sort(function (a, b) {
+      return (a.raceRank || 0) - (b.raceRank || 0) || b.prizeAmount - a.prizeAmount;
     });
 
-    res.json(apiSuccess(rows));
+    res.json(apiSuccess({ entries: entries }));
   }),
 );
 

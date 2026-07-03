@@ -30,18 +30,34 @@ router.get(
   }),
 );
 
+function mapDepositOrder(order) {
+  return {
+    id: String(order._id),
+    amount: order.amount,
+    status: order.status,
+    referenceCode: order.referenceCode || "",
+    transferContent: order.transferContent || "",
+    expiredAt: order.expiredAt || null,
+    createdAt: order.createdAt,
+  };
+}
+
 router.post(
   "/me/deposit-orders",
   asyncHandler(async function (req, res) {
     var amount = Number(req.body.amount || 0);
     if (amount <= 0) throw apiError("Số tiền không hợp lệ", 400);
     var wallet = await getUserWallet(req.user.id);
+    var referenceCode = "NAP" + Date.now().toString(36).toUpperCase();
     var order = await DepositOrder.create({
       walletId: wallet._id,
       userId: req.user.id,
       amount: amount,
       status: "PAID",
-      paymentMethod: req.body.paymentMethod || "MANUAL",
+      paymentMethod: req.body.paymentMethod || req.body.provider || "MANUAL",
+      referenceCode: referenceCode,
+      transferContent: referenceCode + " " + req.user.id,
+      expiredAt: new Date(Date.now() + 15 * 60 * 1000),
       note: req.body.note || "Nạp tiền thủ công",
     });
     await recordTransaction(wallet, {
@@ -52,11 +68,7 @@ router.post(
       referenceId: String(order._id),
       description: "Nạp tiền vào ví",
     });
-    res.status(201).json(apiSuccess({
-      id: String(order._id),
-      amount: order.amount,
-      status: order.status,
-    }, "Nạp tiền thành công"));
+    res.status(201).json(apiSuccess(mapDepositOrder(order), "Nạp tiền thành công"));
   }),
 );
 
@@ -75,7 +87,7 @@ router.get(
   asyncHandler(async function (req, res) {
     var order = await DepositOrder.findOne({ _id: req.params.id, userId: req.user.id }).exec();
     if (!order) throw apiError("Không tìm thấy lệnh nạp", 404);
-    res.json(apiSuccess({ id: String(order._id), amount: order.amount, status: order.status }));
+    res.json(apiSuccess(mapDepositOrder(order)));
   }),
 );
 
@@ -92,9 +104,10 @@ router.post(
       userId: req.user.id,
       amount: amount,
       status: "PENDING",
-      bankAccount: req.body.bankAccount || "",
+      bankAccount: req.body.bankAccountNumber || req.body.bankAccount || "",
       bankName: req.body.bankName || "",
-      accountName: req.body.accountName || "",
+      accountName: req.body.bankAccountName || req.body.accountName || "",
+      note: req.body.reason || "",
     });
 
     wallet.availableBalance -= amount;

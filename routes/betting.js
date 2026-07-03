@@ -37,6 +37,9 @@ function mapBet(bet) {
     id: String(bet._id),
     marketId: String(bet.marketId),
     raceId: String(bet.raceId),
+    raceName: bet.raceName || "",
+    tournamentId: bet.tournamentId ? String(bet.tournamentId) : null,
+    tournamentName: bet.tournamentName || "",
     userId: String(bet.userId),
     username: bet.username,
     participantId: bet.participantId,
@@ -44,8 +47,13 @@ function mapBet(bet) {
     horseName: bet.horseName,
     stakeAmount: Number(bet.stakeAmount || 0),
     potentialPayoutAmount: Number(bet.potentialPayoutAmount || 0),
+    winningTaxAmount: Number(bet.winningTaxAmount || 0),
+    grossProfitAmount: Number(bet.grossProfitAmount || 0),
+    netProfitAmount: Number(bet.netProfitAmount || 0),
     status: bet.status,
     placedAt: bet.placedAt,
+    lockedAt: bet.lockedAt || null,
+    settledAt: bet.settledAt || null,
   };
 }
 
@@ -133,6 +141,9 @@ router.post(
     var bet = await Bet.create({
       marketId: market._id,
       raceId: market.raceId,
+      raceName: market.raceName || "",
+      tournamentId: market.tournamentId || null,
+      tournamentName: market.tournamentName || "",
       userId: req.user.id,
       username: user?.username || user?.fullName || "",
       participantId: participantId,

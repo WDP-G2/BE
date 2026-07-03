@@ -7,9 +7,21 @@ var Notification = require("../models/notification");
 var { authenticate, requireRole } = require("../middleware/auth");
 var asyncHandler = require("../utils/asyncHandler");
 var { apiSuccess, apiError } = require("../utils/apiResponse");
-var { getUserWallet, mapWallet } = require("../services/walletLedger");
+var { getUserWallet, mapWallet, mapTransaction } = require("../services/walletLedger");
 
 router.use(authenticate, requireRole("SPECTATOR"));
+
+function mapNotificationSummary(n) {
+  return {
+    id: String(n._id),
+    title: n.title,
+    message: n.message,
+    readStatus: n.readStatus,
+    read: n.readStatus === "READ",
+    readAt: n.readAt,
+    createdAt: n.createdAt,
+  };
+}
 
 router.get(
   "/dashboard",
@@ -29,6 +41,10 @@ router.get(
 
     var txs = await WalletTransaction.find({ userId: req.user.id }).sort({ createdAt: -1 }).limit(5).exec();
     var notes = await Notification.find({ userId: req.user.id }).sort({ createdAt: -1 }).limit(5).exec();
+    var openMarketRows = await BetMarket.find({ status: "OPEN" })
+      .sort({ openedAt: -1 })
+      .limit(5)
+      .exec();
 
     res.json(apiSuccess({
       role: "SPECTATOR",
@@ -44,19 +60,24 @@ router.get(
         marketplaceEnabled: true,
       },
       alerts: [],
-      upcoming: [],
+      upcoming: openMarketRows.map(function (market) {
+        return {
+          type: "BET_MARKET",
+          id: String(market._id),
+          title: market.raceName || market.tournamentName || "Kèo cược",
+          status: market.status,
+          at: market.openedAt,
+          metadata: { tournamentName: market.tournamentName, raceId: String(market.raceId) },
+        };
+      }),
       quickLinks: [
         { label: "Tournaments", route: "/spectator/tournaments", enabled: true },
         { label: "Betting", route: "/spectator/betting", enabled: true },
         { label: "Wallet", route: "/spectator/wallet", enabled: true },
         { label: "Notifications", route: "/spectator/notifications", enabled: true },
       ],
-      recentTransactions: txs.map(function (tx) {
-        return { type: tx.type, amount: tx.amount, createdAt: tx.createdAt, description: tx.description };
-      }),
-      recentNotifications: notes.map(function (n) {
-        return { id: String(n._id), title: n.title, message: n.message, createdAt: n.createdAt };
-      }),
+      recentTransactions: txs.map(mapTransaction),
+      recentNotifications: notes.map(mapNotificationSummary),
     }));
   }),
 );

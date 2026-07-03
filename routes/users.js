@@ -353,32 +353,45 @@ router.get("/me/profile", authenticate, async function (req, res, next) {
   }
 });
 
-/* PUT /users/me/profile - update current user profile */
-router.put("/me/profile", authenticate, async function (req, res, next) {
-  try {
-    var user = await User.findById(req.user.id).exec();
-    if (!user) {
-      return fail(res, 401, "Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại");
+/* PUT /users/me/profile - update current user profile (supports optional avatar upload) */
+router.put(
+  "/me/profile",
+  authenticate,
+  avatarUpload.single("avatar"),
+  async function (req, res, next) {
+    try {
+      var user = await User.findById(req.user.id).exec();
+      if (!user) {
+        return fail(res, 401, "Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại");
+      }
+
+      var fullName = (req.body.fullName || req.body.name || "").trim();
+      var phone = (req.body.phone || "").trim();
+      var location = (req.body.location || "").trim();
+
+      if (fullName) {
+        user.fullName = fullName;
+        user.name = fullName;
+      }
+      if (phone) user.phone = phone;
+      if (location) user.location = location;
+      if (req.body.avatarUrl) user.avatarUrl = String(req.body.avatarUrl).trim();
+
+      if (req.file) {
+        var uploaded = await uploadBufferToCloudinary(req.file, "horse-racing/avatars");
+        user.avatarUrl = uploaded ? uploaded.secure_url || uploaded.url || user.avatarUrl : user.avatarUrl;
+      }
+
+      await user.save();
+      ok(res, toPublicUser(user), "Cập nhật hồ sơ thành công");
+    } catch (err) {
+      if (isCloudinaryError(err)) {
+        return fail(res, 400, String(err.message || err));
+      }
+      next(err);
     }
-
-    var fullName = (req.body.fullName || req.body.name || "").trim();
-    var phone = (req.body.phone || "").trim();
-    var location = (req.body.location || "").trim();
-
-    if (fullName) {
-      user.fullName = fullName;
-      user.name = fullName;
-    }
-    if (phone) user.phone = phone;
-    if (location) user.location = location;
-    if (req.body.avatarUrl) user.avatarUrl = String(req.body.avatarUrl).trim();
-
-    await user.save();
-    ok(res, toPublicUser(user), "Cập nhật hồ sơ thành công");
-  } catch (err) {
-    next(err);
-  }
-});
+  },
+);
 
 /* GET /users/me - current authenticated user */
 router.get("/me", async function (req, res, next) {
@@ -402,45 +415,6 @@ router.get("/me", async function (req, res, next) {
     return fail(res, 401, "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại");
   }
 });
-
-router.get("/me/profile", authenticate, async function (req, res, next) {
-  try {
-    var user = await User.findById(req.user.id).exec();
-    if (!user) return fail(res, 401, "Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại");
-    res.json(toPublicUser(user));
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.put(
-  "/me/profile",
-  authenticate,
-  avatarUpload.single("avatar"),
-  async function (req, res, next) {
-    try {
-      var user = await User.findById(req.user.id).exec();
-      if (!user) return fail(res, 401, "Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại");
-
-      if (req.body.fullName !== undefined) user.fullName = req.body.fullName;
-      if (req.body.phone !== undefined) user.phone = req.body.phone;
-      if (req.body.location !== undefined) user.location = req.body.location;
-
-      if (req.file) {
-        var uploaded = await uploadBufferToCloudinary(req.file, "horse-racing/avatars");
-        user.avatarUrl = uploaded ? uploaded.secure_url || uploaded.url || "" : user.avatarUrl;
-      }
-
-      await user.save();
-      res.json(toPublicUser(user));
-    } catch (err) {
-      if (isCloudinaryError(err)) {
-        return res.status(400).json({ error: String(err.message || err) });
-      }
-      next(err);
-    }
-  },
-);
 
 router.get("/:id", async function (req, res, next) {
   try {

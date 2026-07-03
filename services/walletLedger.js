@@ -20,16 +20,21 @@ function mapWallet(wallet) {
 }
 
 function mapTransaction(tx) {
+  var amount = Number(tx.amount || 0);
   return {
     id: String(tx._id),
     walletId: String(tx.walletId),
     userId: tx.userId ? String(tx.userId) : null,
     type: tx.type,
-    amount: Number(tx.amount || 0),
+    direction: amount < 0 ? "DEBIT" : "CREDIT",
+    amount: Math.abs(amount),
     balanceAfter: Number(tx.balanceAfter || 0),
+    availableAfter: Number(tx.balanceAfter || 0),
+    status: "SUCCESS",
     referenceType: tx.referenceType || "",
     referenceId: tx.referenceId || "",
     description: tx.description || "",
+    note: tx.description || "",
     createdAt: tx.createdAt,
   };
 }
