@@ -10,13 +10,13 @@ var {
   mapParticipant,
   mapRaceSummary,
   applyRefereeAssignment,
+  applyRaceFieldsUpdate,
 } = require("../../services/tournamentRaceService");
 var { mapInvitation } = require("../../utils/refereeInvitationMapper");
+var { mapTournament } = require("../../utils/tournamentMapper");
 var { authenticate, requireRole } = require("../../middleware/auth");
 var asyncHandler = require("../../utils/asyncHandler");
 var { apiSuccess, apiError } = require("../../utils/apiResponse");
-var tournamentsRouter = require("../tournaments");
-var { mapTournament, applyRaceFieldsUpdate } = tournamentsRouter;
 
 router.use(authenticate, requireRole("ADMIN"));
 
