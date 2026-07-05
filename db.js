@@ -1,9 +1,15 @@
 require("dotenv").config();
+var dns = require("dns");
 var mongoose = require("mongoose");
 
 var uri = process.env.MONGODB_URI || "";
 
 mongoose.set("strictQuery", true);
+
+/** Windows: resolver mặc định có thể từ chối querySrv → dùng DNS công cộng */
+if (uri.startsWith("mongodb+srv://")) {
+  dns.setServers(["8.8.8.8", "8.8.4.4", "1.1.1.1"]);
+}
 
 var connectPromise = Promise.resolve();
 
