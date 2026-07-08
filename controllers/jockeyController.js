@@ -93,6 +93,14 @@ async function getPrizes(req, res) {
 
       (race.results || []).forEach(function (result) {
         if (String(result.jockeyId || "") !== String(req.user.id)) return;
+
+        rows.push({
+          id: String(result._id),
+          tournamentId: String(tournament._id),
+          tournamentName: tournament.name || "",
+          raceId: String(race._id),
+          raceName: race.name || "",
+        });
       });
     });
   });
