@@ -75,6 +75,12 @@ async function getPerformance(req, res) {
 }
 
 async function getPrizes(req, res) {
+  var tournaments = await Tournament.find({
+    "registrations.jockeyId": req.user.id,
+  })
+    .lean()
+    .exec();
+
   res.json(apiSuccess([]));
 }
 
