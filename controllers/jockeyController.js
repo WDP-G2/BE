@@ -90,6 +90,10 @@ async function getPrizes(req, res) {
       ) {
         prizeByRank[Number(prize.rank)] = Number(prize.amount || 0);
       });
+
+      (race.results || []).forEach(function (result) {
+        if (String(result.jockeyId || "") !== String(req.user.id)) return;
+      });
     });
   });
 
