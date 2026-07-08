@@ -83,7 +83,14 @@ async function getPrizes(req, res) {
 
   var rows = [];
   tournaments.forEach(function (tournament) {
-    (tournament.races || []).forEach(function (race) {});
+    (tournament.races || []).forEach(function (race) {
+      var prizeByRank = {};
+      (Array.isArray(race.prizes) ? race.prizes : []).forEach(function (
+        prize,
+      ) {
+        prizeByRank[Number(prize.rank)] = Number(prize.amount || 0);
+      });
+    });
   });
 
   res.json(apiSuccess([]));
