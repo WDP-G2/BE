@@ -81,6 +81,11 @@ async function getPrizes(req, res) {
     .lean()
     .exec();
 
+  var rows = [];
+  tournaments.forEach(function (tournament) {
+    (tournament.races || []).forEach(function (race) {});
+  });
+
   res.json(apiSuccess([]));
 }
 
