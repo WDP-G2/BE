@@ -100,6 +100,8 @@ async function getPrizes(req, res) {
           tournamentName: tournament.name || "",
           raceId: String(race._id),
           raceName: race.name || "",
+          horseName: result.horseName || "",
+          position: Number(result.position || 0),
         });
       });
     });
