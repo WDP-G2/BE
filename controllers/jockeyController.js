@@ -103,6 +103,8 @@ async function getPrizes(req, res) {
           horseName: result.horseName || "",
           position: Number(result.position || 0),
           prizeAmount: prizeByRank[Number(result.position)] || 0,
+          points: Number(result.points || 0),
+          awardedAt: race.updatedAt || tournament.updatedAt || null,
         });
       });
     });
