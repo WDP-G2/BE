@@ -3,7 +3,7 @@ var User = require("../../models/user");
 var { apiSuccess, apiError } = require("../../utils/apiResponse");
 
 function mapApplication(app) {
-  return {
+  return Object.assign({}, app.profileData || {}, {
     id: String(app._id),
     profileId: String(app._id),
     userId: String(app.userId),
@@ -13,14 +13,11 @@ function mapApplication(app) {
     phone: app.phone,
     note: app.note,
     profileData: app.profileData || {},
-    licenseNumber: app.profileData?.licenseNumber || "",
-    specialty: app.profileData?.specialty || "",
-    experienceYears: app.profileData?.experienceYears || 0,
     rejectReason: app.rejectReason || "",
     reviewedAt: app.reviewedAt,
     createdAt: app.createdAt,
     updatedAt: app.updatedAt,
-  };
+  });
 }
 
 async function list(req, res) {
