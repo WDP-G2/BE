@@ -102,6 +102,7 @@ async function getPrizes(req, res) {
           raceName: race.name || "",
           horseName: result.horseName || "",
           position: Number(result.position || 0),
+          prizeAmount: prizeByRank[Number(result.position)] || 0,
         });
       });
     });
