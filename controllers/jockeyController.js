@@ -110,7 +110,13 @@ async function getPrizes(req, res) {
     });
   });
 
-  res.json(apiSuccess([]));
+  rows.sort(function (a, b) {
+    var aTime = a.awardedAt ? new Date(a.awardedAt).getTime() : 0;
+    var bTime = b.awardedAt ? new Date(b.awardedAt).getTime() : 0;
+    return bTime - aTime;
+  });
+
+  res.json(apiSuccess(rows));
 }
 
 async function getProfile(req, res) {
