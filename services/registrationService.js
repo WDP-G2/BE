@@ -23,7 +23,7 @@ function toDayKey(value) {
   return year + "-" + month + "-" + day;
 }
 
-function getAgeInMonths(birthDate, referenceDate) {
+function getAgeInMonthsFromBirthDate(birthDate, referenceDate) {
   if (!birthDate) return null;
   var birth = new Date(birthDate);
   var reference = referenceDate ? new Date(referenceDate) : new Date();
@@ -37,8 +37,24 @@ function getAgeInMonths(birthDate, referenceDate) {
   return months;
 }
 
+function getAgeInMonths(horseOrBirthDate, referenceDate) {
+  if (horseOrBirthDate && typeof horseOrBirthDate === "object") {
+    var horse = horseOrBirthDate;
+    var fromBirthDate = getAgeInMonthsFromBirthDate(horse.birthDate, referenceDate);
+    if (fromBirthDate !== null) return fromBirthDate;
+
+    var ageYears = Number(horse.age);
+    if (Number.isFinite(ageYears) && ageYears > 0) {
+      return ageYears * 12;
+    }
+    return null;
+  }
+
+  return getAgeInMonthsFromBirthDate(horseOrBirthDate, referenceDate);
+}
+
 function getHorseAgeRestriction(horse, referenceDate) {
-  var ageMonths = getAgeInMonths(horse && horse.birthDate, referenceDate);
+  var ageMonths = getAgeInMonths(horse, referenceDate);
   if (ageMonths === null) {
     return "Ngựa cần có ngày sinh để kiểm tra tuổi thi đấu";
   }

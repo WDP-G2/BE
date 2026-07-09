@@ -97,8 +97,90 @@ async function ensureUsers() {
   return users;
 }
 
+async function ensureJockeyRoleApplications(users) {
+  var RoleApplication = require("../models/roleApplication");
+  var adminUser = users.find(function (user) {
+    return user.role === "ADMIN";
+  });
+  var jockeyUsers = users.filter(function (user) {
+    return user.role === "JOCKEY";
+  });
+
+  for (var i = 0; i < jockeyUsers.length; i += 1) {
+    var user = jockeyUsers[i];
+    var licenseSuffix = String(i + 1).padStart(3, "0");
+
+    await RoleApplication.findOneAndUpdate(
+      { userId: user._id, role: "JOCKEY" },
+      {
+        $set: {
+          status: "APPROVED",
+          fullName: user.fullName || user.name || user.username || "",
+          phone: user.phone || "",
+          profileData: {
+            licenseNumber: "VN-JK-" + licenseSuffix,
+            experienceYears: 3,
+            heightCm: 170,
+            weightKg: 58,
+            specialties: "Đua cự ly trung bình",
+            bio: "Jockey đã được duyệt hồ sơ",
+          },
+          reviewedBy: adminUser ? adminUser._id : undefined,
+          reviewedAt: new Date(),
+        },
+        $setOnInsert: {
+          userId: user._id,
+          role: "JOCKEY",
+        },
+      },
+      { upsert: true, new: true },
+    ).exec();
+  }
+}
+
+async function ensureOwnerRoleApplications(users) {
+  var RoleApplication = require("../models/roleApplication");
+  var adminUser = users.find(function (user) {
+    return user.role === "ADMIN";
+  });
+  var ownerUsers = users.filter(function (user) {
+    return user.role === "OWNER";
+  });
+
+  for (var i = 0; i < ownerUsers.length; i += 1) {
+    var user = ownerUsers[i];
+    var stableSuffix = String(i + 1).padStart(2, "0");
+
+    await RoleApplication.findOneAndUpdate(
+      { userId: user._id, role: "OWNER" },
+      {
+        $set: {
+          status: "APPROVED",
+          fullName: user.fullName || user.name || user.username || "",
+          phone: user.phone || "",
+          profileData: {
+            stableName: "Trang trại " + (user.fullName || user.username || "Chủ ngựa"),
+            address: user.location || "Chưa cập nhật",
+            experienceYears: 3 + (i % 5),
+            bio: "Chủ ngựa đã được duyệt hồ sơ",
+          },
+          reviewedBy: adminUser ? adminUser._id : undefined,
+          reviewedAt: new Date(),
+        },
+        $setOnInsert: {
+          userId: user._id,
+          role: "OWNER",
+        },
+      },
+      { upsert: true, new: true },
+    ).exec();
+  }
+}
+
 async function seedSampleData() {
   var users = await ensureUsers();
+  await ensureOwnerRoleApplications(users);
+  await ensureJockeyRoleApplications(users);
   await ensurePlatformData(users);
   console.log("Sample data seeded");
 }

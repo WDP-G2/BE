@@ -15,6 +15,11 @@ function toAuthResponse(user, token) {
     role: pub.role,
     fullName: pub.fullName,
     active: pub.active,
+    pendingRole: pub.pendingRole,
+    roleApprovalStatus: pub.roleApprovalStatus,
+    roleReviewReason: pub.roleReviewReason,
+    roleReviewedBy: pub.roleReviewedBy,
+    roleReviewedAt: pub.roleReviewedAt,
     avatarUrl: pub.avatarUrl,
     location: pub.location,
   };

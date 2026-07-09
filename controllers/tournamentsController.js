@@ -3,7 +3,7 @@ var User = require("../models/user");
 var Horse = require("../models/horse");
 var Tournament = require("../models/tournament");
 var Province = require("../models/province");
-var { fail } = require("../utils/httpErrors");
+var { fail, ok } = require("../utils/httpErrors");
 var { isCloudinaryError } = require("../utils/cloudinaryUpload");
 var { mapVenue } = require("../utils/systemSettingsMapper");
 var tm = require("../utils/tournamentMapper");
@@ -236,17 +236,16 @@ async function updateStatus(req, res, next) {
       tournament.status,
     );
 
-    if (nextStatusCode === "ONGOING") {
-      (tournament.races || []).forEach(function (race) {
-        var raceCode = tm.toRaceStatusCode(race.status);
-        if (raceCode === "DRAFT" || raceCode === "SCHEDULED") {
-          race.status = tm.RACE_STATUS_LABELS.ONGOING;
-        }
-      });
+    var tournamentStatusSync = require("../services/tournamentStatusSync");
+
+    if (nextStatusCode === "SCHEDULED") {
+      tournamentStatusSync.syncScheduledRaceStatuses(tournament);
+    } else {
+      tournamentStatusSync.syncPreRaceStatuses(tournament, nextStatusCode);
     }
 
     await tournament.save();
-    res.json(tm.mapTournament(tournament));
+    return ok(res, tm.mapTournament(tournament), "Cập nhật trạng thái giải đấu thành công");
   } catch (err) {
     next(err);
   }
@@ -262,13 +261,10 @@ async function schedule(req, res, next) {
       return fail(res, 404, "Không tìm thấy giải đấu");
     }
 
+    var tournamentStatusSync = require("../services/tournamentStatusSync");
+
     tournament.status = tm.TOURNAMENT_STATUS_LABELS.SCHEDULED;
-    (tournament.races || []).forEach(function (race) {
-      var raceCode = tm.toRaceStatusCode(race.status);
-      if (raceCode === "DRAFT" || raceCode === "SCHEDULED") {
-        race.status = tm.RACE_STATUS_LABELS.SCHEDULED;
-      }
-    });
+    tournamentStatusSync.syncScheduledRaceStatuses(tournament);
 
     await tournament.save();
     res.json(tm.mapTournament(tournament));
@@ -285,6 +281,12 @@ async function getByIdentifier(req, res, next) {
 
     if (!tournament) {
       return fail(res, 404, "Không tìm thấy giải đấu");
+    }
+
+    var tournamentStatusSync = require("../services/tournamentStatusSync");
+    var tournamentCode = tm.toTournamentStatusCode(tournament.status);
+    if (tournamentStatusSync.syncTournamentRaceStatuses(tournament, tournamentCode)) {
+      await tournament.save();
     }
 
     res.json(tm.mapTournament(tournament));

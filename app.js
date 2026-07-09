@@ -25,6 +25,8 @@ var roleApplicationsRouter = require("./routes/roleApplications");
 var rankingsRouter = require("./routes/rankings");
 var betsRouter = require("./routes/bets");
 var bettingRoutes = require("./routes/betting");
+var zalopayRouter = require("./routes/zalopay");
+var publicSystemSettingsRouter = require("./routes/publicSystemSettings");
 var jsonErrorHandler = require("./middleware/errorHandler");
 
 require("./db");
@@ -72,6 +74,7 @@ app.use("/role-applications", roleApplicationsRouter);
 app.use("/rankings", rankingsRouter);
 app.use("/bets", betsRouter);
 app.use("/races", bettingRoutes.racesRouter);
+app.use("/api/zalopay", zalopayRouter);
 
 var apiRouter = express.Router();
 apiRouter.use("/auth", authRouter);
@@ -94,6 +97,8 @@ apiRouter.use("/role-applications", roleApplicationsRouter);
 apiRouter.use("/rankings", rankingsRouter);
 apiRouter.use("/bets", betsRouter);
 apiRouter.use("/races", bettingRoutes.racesRouter);
+apiRouter.use("/zalopay", zalopayRouter);
+apiRouter.use("/system-settings", publicSystemSettingsRouter);
 
 apiRouter.get("/health", function (req, res) {
   var mongoose = require("./db");

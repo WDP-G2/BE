@@ -1,5 +1,7 @@
 var mongoose = require("mongoose");
 var Tournament = require("../models/tournament");
+var tournamentStatusSync = require("./tournamentStatusSync");
+var tm = require("../utils/tournamentMapper");
 var Province = require("../models/province");
 var User = require("../models/user");
 var RefereeSalaryConfig = require("../models/refereeSalaryConfig");
@@ -10,7 +12,7 @@ function isObjectId(value) {
   return mongoose.Types.ObjectId.isValid(String(value || ""));
 }
 
-async function findRaceContext(raceId) {
+async function findRaceContext(raceId, options) {
   if (!isObjectId(raceId)) return null;
 
   var tournament = await Tournament.findOne({ "races._id": raceId }).exec();
@@ -18,6 +20,22 @@ async function findRaceContext(raceId) {
 
   var race = tournament.races.id(String(raceId));
   if (!race) return null;
+
+  var shouldRepair = !options || options.repair !== false;
+  if (shouldRepair && tm.toTournamentStatusCode(tournament.status) === "ONGOING") {
+    var needsSave = tournamentStatusSync.repairRacesForOngoingTournament(tournament);
+    var previousStatus = race.status;
+    tournamentStatusSync.ensureRaceScheduledForStart(tournament, race);
+    if (race.status !== previousStatus) {
+      needsSave = true;
+    }
+    if (backfillResultFinalizedAt(tournament)) {
+      needsSave = true;
+    }
+    if (needsSave) {
+      await tournament.save();
+    }
+  }
 
   return { tournament: tournament, race: race };
 }
@@ -43,10 +61,49 @@ async function listAllRaces(filterFn) {
   return rows;
 }
 
+function prizeAmountForRank(race, rank) {
+  if (!rank) return 0;
+  var prizes = tm.mapPrizes(race.prizes);
+  for (var i = 0; i < prizes.length; i += 1) {
+    if (Number(prizes[i].rank) === Number(rank)) {
+      return Number(prizes[i].amount || 0);
+    }
+  }
+  return 0;
+}
+
+function sumRacePrizePayouts(race) {
+  return (race.results || []).reduce(function (sum, result) {
+    return sum + prizeAmountForRank(race, result.position);
+  }, 0);
+}
+
+function backfillResultFinalizedAt(tournament) {
+  if (!tournament) return false;
+
+  var changed = false;
+  (tournament.races || []).forEach(function (race) {
+    if (
+      !race.resultFinalizedAt &&
+      tm.toRaceStatusCode(race.status) === "RESULT_CONFIRMED" &&
+      race.results &&
+      race.results.length
+    ) {
+      race.resultFinalizedAt = tournament.updatedAt || new Date();
+      changed = true;
+    }
+  });
+
+  return changed;
+}
+
 function mapRaceSummary(ctx) {
   var race = ctx.race;
   var raceStatusAliases = {
     "Nháp": "DRAFT",
+    "Đã công bố": "PUBLISHED",
+    "Đang mở đăng ký": "OPEN_REGISTRATION",
+    "Đã đóng đăng ký": "REGISTRATION_CLOSED",
     "Sắp chạy": "SCHEDULED",
     "Sắp diễn ra": "SCHEDULED",
     "Đã lên lịch": "SCHEDULED",
@@ -65,6 +122,19 @@ function mapRaceSummary(ctx) {
   var checkedInCount = participants.filter(function (reg) {
     return reg.checkInStatus === "CHECKED_IN";
   }).length;
+  var winnerResult = (race.results || []).find(function (result) {
+    return Number(result.position) === 1;
+  });
+  var resultFinalizedAt = race.resultFinalizedAt || null;
+  if (
+    !resultFinalizedAt &&
+    statusCode === "RESULT_CONFIRMED" &&
+    race.results &&
+    race.results.length &&
+    ctx.tournament
+  ) {
+    resultFinalizedAt = ctx.tournament.updatedAt || null;
+  }
   return {
     id: String(race._id),
     raceId: String(race._id),
@@ -82,12 +152,17 @@ function mapRaceSummary(ctx) {
     status: statusCode,
     statusCode: statusCode,
     statusLabel: race.status,
+    tournamentStatus: ctx.tournamentStatus || "",
     refereeId: race.refereeId ? String(race.refereeId) : null,
     refereePaymentStatus: race.refereePaymentStatus || null,
     salaryConfigId: race.salaryConfigId ? String(race.salaryConfigId) : null,
     participantCount: participants.length,
     checkedInCount: checkedInCount,
     pendingCheckInCount: participants.length - checkedInCount,
+    resultFinalizedAt: resultFinalizedAt,
+    winnerName: winnerResult ? winnerResult.horseName : null,
+    totalPrizeAmount: sumRacePrizePayouts(race),
+    prizes: tm.mapPrizes(race.prizes),
   };
 }
 
@@ -129,6 +204,45 @@ async function applyRefereeAssignment(race, refereeId, salaryConfigId) {
   race.salaryConfigId = salaryConfigId || null;
   race.refereePaymentStatus = amount > 0 ? "HELD" : "NONE";
   race.refereePaymentAmount = amount;
+}
+
+function assertRaceReadyToStart(tournament, race) {
+  var participants = getApprovedParticipants(tournament, race._id);
+  if (!participants.length) {
+    var emptyErr = new Error("Race has no approved participants");
+    emptyErr.status = 400;
+    throw emptyErr;
+  }
+
+  var gates = {};
+  for (var i = 0; i < participants.length; i += 1) {
+    var gate = Number(participants[i].gateNumber);
+    if (!gate || gate <= 0) {
+      var gateErr = new Error("Gate number must be assigned before race starts");
+      gateErr.status = 400;
+      throw gateErr;
+    }
+    if (gates[gate]) {
+      var dupErr = new Error("Gate number already exists in this race");
+      dupErr.status = 400;
+      throw dupErr;
+    }
+    gates[gate] = true;
+  }
+
+  var checkedInCount = participants.filter(function (reg) {
+    return reg.checkInStatus === "CHECKED_IN";
+  }).length;
+  var configuredMin = Number(race.minHorses || 0);
+  var minRequired = configuredMin > 0 ? configuredMin : 1;
+  if (minRequired > participants.length) {
+    minRequired = participants.length;
+  }
+  if (checkedInCount < minRequired) {
+    var minErr = new Error("Race does not have enough checked-in participants");
+    minErr.status = 400;
+    throw minErr;
+  }
 }
 
 function getRaceDefaults(tournament) {
@@ -257,7 +371,11 @@ module.exports = {
   findRaceContext: findRaceContext,
   listAllRaces: listAllRaces,
   mapRaceSummary: mapRaceSummary,
+  prizeAmountForRank: prizeAmountForRank,
+  sumRacePrizePayouts: sumRacePrizePayouts,
+  backfillResultFinalizedAt: backfillResultFinalizedAt,
   getApprovedParticipants: getApprovedParticipants,
+  assertRaceReadyToStart: assertRaceReadyToStart,
   mapParticipant: mapParticipant,
   applyRefereeAssignment: applyRefereeAssignment,
   getRaceDefaults: getRaceDefaults,

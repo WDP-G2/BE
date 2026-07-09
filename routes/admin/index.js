@@ -9,6 +9,7 @@ router.use("/horses", require("./horses"));
 router.use("/wallet", require("./wallet"));
 router.use("/bet-markets", require("./betMarkets"));
 router.use("/referee-salary-configs", require("./refereeSalaryConfigs"));
+router.use("/referee-invitations", require("./refereeInvitations"));
 router.use(
   "/tournaments",
   authenticate,

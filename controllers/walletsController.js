@@ -4,20 +4,8 @@ var {
   getUserWallet,
   mapWallet,
   mapTransaction,
-  recordTransaction,
 } = require("../services/walletLedger");
-
-function mapDepositOrder(order) {
-  return {
-    id: String(order._id),
-    amount: order.amount,
-    status: order.status,
-    referenceCode: order.referenceCode || "",
-    transferContent: order.transferContent || "",
-    expiredAt: order.expiredAt || null,
-    createdAt: order.createdAt,
-  };
-}
+var depositOrderService = require("../services/depositOrderService");
 
 async function getMyWallet(req, res) {
   var wallet = await getUserWallet(req.user.id);
@@ -31,43 +19,35 @@ async function listMyTransactions(req, res) {
 }
 
 async function createDepositOrder(req, res) {
-  var amount = Number(req.body.amount || 0);
-  if (amount <= 0) throw apiError("Số tiền không hợp lệ", 400);
   var wallet = await getUserWallet(req.user.id);
-  var referenceCode = "NAP" + Date.now().toString(36).toUpperCase();
-  var order = await DepositOrder.create({
-    walletId: wallet._id,
+  var order = await depositOrderService.createZaloPayDepositOrder({
+    amount: req.body.amount,
+    body: req.body,
+    wallet: wallet,
     userId: req.user.id,
-    amount: amount,
-    status: "PAID",
-    paymentMethod: req.body.paymentMethod || req.body.provider || "MANUAL",
-    referenceCode: referenceCode,
-    transferContent: referenceCode + " " + req.user.id,
-    expiredAt: new Date(Date.now() + 15 * 60 * 1000),
-    note: req.body.note || "Nạp tiền thủ công",
+    appUser: req.user.username || req.user.email || "user",
+    depositTarget: "USER",
   });
-  await recordTransaction(wallet, {
-    userId: req.user.id,
-    type: "DEPOSIT",
-    amount: amount,
-    referenceType: "DEPOSIT_ORDER",
-    referenceId: String(order._id),
-    description: "Nạp tiền vào ví",
-  });
-  res.status(201).json(apiSuccess(mapDepositOrder(order), "Nạp tiền thành công"));
+  res.status(201).json(apiSuccess(order, "Tạo lệnh nạp thành công"));
 }
 
 async function listMyDepositOrders(req, res) {
   var rows = await DepositOrder.find({ userId: req.user.id }).sort({ createdAt: -1 }).exec();
-  res.json(apiSuccess(rows.map(function (o) {
-    return { id: String(o._id), amount: o.amount, status: o.status, createdAt: o.createdAt };
-  })));
+  res.json(
+    apiSuccess(
+      rows.map(function (order) {
+        return depositOrderService.mapDepositOrder(order);
+      }),
+    ),
+  );
 }
 
 async function getMyDepositOrder(req, res) {
   var order = await DepositOrder.findOne({ _id: req.params.id, userId: req.user.id }).exec();
   if (!order) throw apiError("Không tìm thấy lệnh nạp", 404);
-  res.json(apiSuccess(mapDepositOrder(order)));
+
+  order = await depositOrderService.syncPendingOrder(order);
+  res.json(apiSuccess(depositOrderService.mapDepositOrder(order)));
 }
 
 async function createWithdrawal(req, res) {
@@ -91,14 +71,28 @@ async function createWithdrawal(req, res) {
   wallet.holdBalance = Number(wallet.holdBalance || 0) + amount;
   await wallet.save();
 
-  res.status(201).json(apiSuccess({ id: String(item._id), amount: item.amount, status: item.status }, "Tạo yêu cầu rút tiền thành công"));
+  res.status(201).json(
+    apiSuccess({ id: String(item._id), amount: item.amount, status: item.status }, "Tạo yêu cầu rút tiền thành công"),
+  );
 }
 
 async function listMyWithdrawals(req, res) {
   var rows = await Withdrawal.find({ userId: req.user.id }).sort({ createdAt: -1 }).exec();
-  res.json(apiSuccess(rows.map(function (w) {
-    return { id: String(w._id), amount: w.amount, status: w.status, createdAt: w.createdAt };
-  })));
+  res.json(
+    apiSuccess(
+      rows.map(function (w) {
+        return { id: String(w._id), amount: w.amount, status: w.status, createdAt: w.createdAt };
+      }),
+    ),
+  );
+}
+
+async function payMyDepositOrderWithCard(req, res) {
+  var order = await depositOrderService.confirmCardDepositOrder(req.params.id, req.body, {
+    userId: req.user.id,
+    depositTarget: "USER",
+  });
+  res.json(apiSuccess(order, "Thanh toán thẻ thành công"));
 }
 
 module.exports = {
@@ -107,6 +101,7 @@ module.exports = {
   createDepositOrder: createDepositOrder,
   listMyDepositOrders: listMyDepositOrders,
   getMyDepositOrder: getMyDepositOrder,
+  payMyDepositOrderWithCard: payMyDepositOrderWithCard,
   createWithdrawal: createWithdrawal,
   listMyWithdrawals: listMyWithdrawals,
 };

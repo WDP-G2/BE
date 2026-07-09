@@ -1,5 +1,6 @@
 var SystemSettings = require("../models/systemSettings");
 var { DEFAULT_RULES } = require("../utils/systemSettingsMapper");
+var violationSettings = require("../utils/violationSettingsMapper");
 
 var DEFAULT_FEES = {
   defaultRegistrationFee: 5000000,
@@ -41,6 +42,16 @@ async function ensureSettingsShape(doc) {
     changed = true;
   }
 
+  if (!Array.isArray(doc.violationTypes) || !doc.violationTypes.length) {
+    doc.violationTypes = violationSettings.DEFAULT_VIOLATION_TYPES.slice();
+    changed = true;
+  }
+
+  if (!Array.isArray(doc.violationPenaltyRules) || !doc.violationPenaltyRules.length) {
+    doc.violationPenaltyRules = violationSettings.DEFAULT_VIOLATION_PENALTY_RULES.slice();
+    changed = true;
+  }
+
   if (changed) {
     await doc.save();
   }
@@ -58,6 +69,8 @@ async function getSettingsDoc() {
         raceDistances: DEFAULT_DISTANCES,
         rules: DEFAULT_RULES,
         bettingEnabled: true,
+        violationTypes: violationSettings.DEFAULT_VIOLATION_TYPES,
+        violationPenaltyRules: violationSettings.DEFAULT_VIOLATION_PENALTY_RULES,
       },
     },
     { upsert: true, new: true },

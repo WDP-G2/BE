@@ -30,6 +30,9 @@ var TOURNAMENT_STATUS_TRANSITIONS = {
 
 var RACE_STATUS_LABELS = {
   DRAFT: "Nháp",
+  PUBLISHED: "Đã công bố",
+  OPEN_REGISTRATION: "Đang mở đăng ký",
+  REGISTRATION_CLOSED: "Đã đóng đăng ký",
   SCHEDULED: "Sắp diễn ra",
   ONGOING: "Đang diễn ra",
   RESULT_CONFIRMED: "Hoàn thành",
@@ -38,6 +41,9 @@ var RACE_STATUS_LABELS = {
 
 var RACE_STATUS_CODES = {
   "Nháp": "DRAFT",
+  "Đã công bố": "PUBLISHED",
+  "Đang mở đăng ký": "OPEN_REGISTRATION",
+  "Đã đóng đăng ký": "REGISTRATION_CLOSED",
   "Sắp chạy": "SCHEDULED",
   "Sắp diễn ra": "SCHEDULED",
   "Đã lên lịch": "SCHEDULED",

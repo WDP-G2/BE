@@ -6,19 +6,7 @@ var {
   mapTransaction,
   recordTransaction,
 } = require("../../services/walletLedger");
-
-function mapDeposit(order) {
-  return {
-    id: String(order._id),
-    userId: order.userId ? String(order.userId) : null,
-    amount: Number(order.amount || 0),
-    status: order.status,
-    paymentMethod: order.paymentMethod,
-    note: order.note,
-    createdAt: order.createdAt,
-    updatedAt: order.updatedAt,
-  };
-}
+var depositOrderService = require("../../services/depositOrderService");
 
 function mapWithdrawal(item) {
   return {
@@ -47,35 +35,25 @@ async function listTransactions(req, res) {
 }
 
 async function createDepositOrder(req, res) {
-  var amount = Number(req.body.amount || 0);
-  if (amount <= 0) throw apiError("Số tiền không hợp lệ", 400);
-
   var wallet = await getSystemWallet();
-  var order = await DepositOrder.create({
-    walletId: wallet._id,
+  var order = await depositOrderService.createZaloPayDepositOrder({
+    amount: req.body.amount,
+    body: req.body,
+    wallet: wallet,
     userId: req.user.id,
-    amount: amount,
-    status: "PAID",
-    paymentMethod: req.body.paymentMethod || "MANUAL",
-    note: req.body.note || "Admin nạp quỹ hệ thống",
+    appUser: req.user.username || req.user.email || "admin",
+    depositTarget: "SYSTEM",
   });
-
-  await recordTransaction(wallet, {
-    userId: req.user.id,
-    type: "DEPOSIT",
-    amount: amount,
-    referenceType: "DEPOSIT_ORDER",
-    referenceId: String(order._id),
-    description: "Nạp quỹ hệ thống",
-  });
-
-  res.status(201).json(apiSuccess(mapDeposit(order), "Tạo lệnh nạp thành công"));
+  res.status(201).json(apiSuccess(order, "Tạo lệnh nạp thành công"));
 }
 
 async function getDepositOrder(req, res) {
   var order = await DepositOrder.findById(req.params.id).exec();
   if (!order) throw apiError("Không tìm thấy lệnh nạp", 404);
-  res.json(apiSuccess(mapDeposit(order)));
+  if (order.depositTarget !== "SYSTEM") throw apiError("Không tìm thấy lệnh nạp", 404);
+
+  order = await depositOrderService.syncPendingOrder(order);
+  res.json(apiSuccess(depositOrderService.mapDepositOrder(order)));
 }
 
 async function listWithdrawals(req, res) {
@@ -111,11 +89,19 @@ async function createWithdrawal(req, res) {
   res.status(201).json(apiSuccess(mapWithdrawal(item), "Rút quỹ thành công"));
 }
 
+async function payDepositOrderWithCard(req, res) {
+  var order = await depositOrderService.confirmCardDepositOrder(req.params.id, req.body, {
+    depositTarget: "SYSTEM",
+  });
+  res.json(apiSuccess(order, "Thanh toán thẻ thành công"));
+}
+
 module.exports = {
   getWallet: getWallet,
   listTransactions: listTransactions,
   createDepositOrder: createDepositOrder,
   getDepositOrder: getDepositOrder,
+  payDepositOrderWithCard: payDepositOrderWithCard,
   listWithdrawals: listWithdrawals,
   createWithdrawal: createWithdrawal,
 };

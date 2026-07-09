@@ -32,6 +32,18 @@ function toDate(value) {
   return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
+function deriveBirthDateFromAge(age) {
+  var ageYears = Number(age);
+  if (!Number.isFinite(ageYears) || ageYears <= 0) return undefined;
+  var now = new Date();
+  return new Date(now.getFullYear() - ageYears, now.getMonth(), now.getDate());
+}
+
+function resolveBirthDate(payload) {
+  if (payload.birthDate) return payload.birthDate;
+  return deriveBirthDateFromAge(payload.age);
+}
+
 function isAdmin(user) {
   return user && user.role === "ADMIN";
 }
@@ -101,7 +113,10 @@ function parseMultipartHorse(req) {
     color: String(body.color || "").trim(),
     heightCm: body.heightCm !== undefined ? Number(body.heightCm) : undefined,
     weightKg: body.weightKg !== undefined ? Number(body.weightKg) : undefined,
-    birthDate: toDate(body.birthDate),
+    birthDate: resolveBirthDate({
+      birthDate: toDate(body.birthDate),
+      age: body.age !== undefined ? Number(body.age) : undefined,
+    }),
     ownerName: String(body.ownerName || "").trim(),
     healthStatus: String(body.healthStatus || "").trim(),
     wins: body.wins !== undefined ? Number(body.wins) : undefined,
@@ -125,9 +140,19 @@ async function findHorse(identifier) {
 async function cleanupNewAssets(assetMap) {
   if (!assetMap) return;
   await Promise.all([
-    destroyCloudinaryAsset(assetMap.imagePublicId),
-    destroyCloudinaryAsset(assetMap.licenseImagePublicId),
+    destroyCloudinaryAsset(assetMap.imagePublicId, "image"),
+    destroyCloudinaryAsset(
+      assetMap.licenseImagePublicId,
+      assetMap.licenseResourceType || "raw",
+    ),
   ]);
+}
+
+function resolveCloudinaryResourceType(file) {
+  if (!file) return "image";
+  var mime = String(file.mimetype || "").toLowerCase();
+  if (mime.indexOf("image/") === 0) return "image";
+  return "raw";
 }
 
 async function uploadHorseAssets(req) {
@@ -141,18 +166,24 @@ async function uploadHorseAssets(req) {
 
   var image = null;
   var license = null;
+  var licenseResourceType = resolveCloudinaryResourceType(licenseFile);
 
   try {
     image = imageFile
-      ? await uploadBufferToCloudinary(imageFile, "horse-racing/horses")
+      ? await uploadBufferToCloudinary(imageFile, "horse-racing/horses", "image")
       : null;
     license = licenseFile
-      ? await uploadBufferToCloudinary(licenseFile, "horse-racing/licenses")
+      ? await uploadBufferToCloudinary(
+          licenseFile,
+          "horse-racing/licenses",
+          licenseResourceType,
+        )
       : null;
   } catch (error) {
     await cleanupNewAssets({
       imagePublicId: image ? image.public_id : "",
       licenseImagePublicId: license ? license.public_id : "",
+      licenseResourceType: licenseResourceType,
     });
     throw error;
   }
@@ -162,6 +193,7 @@ async function uploadHorseAssets(req) {
     imagePublicId: image ? image.public_id : undefined,
     licenseImageUrl: license ? license.secure_url : undefined,
     licenseImagePublicId: license ? license.public_id : undefined,
+    licenseResourceType: license ? licenseResourceType : undefined,
   };
 }
 
@@ -194,4 +226,6 @@ module.exports = {
   cleanupNewAssets: cleanupNewAssets,
   uploadHorseAssets: uploadHorseAssets,
   generateUniqueSlug: generateUniqueSlug,
+  deriveBirthDateFromAge: deriveBirthDateFromAge,
+  resolveBirthDate: resolveBirthDate,
 };

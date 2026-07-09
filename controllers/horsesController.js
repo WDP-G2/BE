@@ -74,11 +74,22 @@ async function getByIdentifier(req, res, next) {
 
 function isCloudinaryErrorMessage(err) {
   var errorMessage = String(err && err.message ? err.message : err);
-  return (
-    errorMessage.indexOf("Cloudinary is not configured") !== -1 ||
+  if (errorMessage.indexOf("Cloudinary is not configured") !== -1) {
+    return "Chưa cấu hình Cloudinary để tải file lên";
+  }
+  if (
+    errorMessage.indexOf("Unsupported ZIP") !== -1 ||
+    errorMessage.indexOf("Invalid image file") !== -1
+  ) {
+    return "File giấy chứng nhận không hợp lệ. Dùng ảnh JPG/PNG hoặc PDF.";
+  }
+  if (
     errorMessage.indexOf("Invalid cloud_name") !== -1 ||
     errorMessage.toLowerCase().indexOf("cloudinary") !== -1
-  );
+  ) {
+    return "Không tải được file lên Cloudinary. Thử lại sau.";
+  }
+  return "";
 }
 
 async function create(req, res, next) {
@@ -135,7 +146,7 @@ async function create(req, res, next) {
       err && err.message ? err.message : err,
     );
     if (isCloudinaryErrorMessage(err)) {
-      return fail(res, 400, "Chưa cấu hình Cloudinary để tải ảnh lên");
+      return fail(res, 400, isCloudinaryErrorMessage(err));
     }
     next(err);
   }
@@ -168,7 +179,12 @@ async function update(req, res, next) {
     if (payload.breed !== undefined) horse.breed = payload.breed;
     if (payload.gender !== undefined) horse.gender = payload.gender;
     if (payload.birthDate !== undefined) horse.birthDate = payload.birthDate;
-    if (Number.isFinite(payload.age)) horse.age = payload.age;
+    if (Number.isFinite(payload.age)) {
+      horse.age = payload.age;
+      if (!horse.birthDate) {
+        horse.birthDate = horseService.deriveBirthDateFromAge(payload.age);
+      }
+    }
     if (payload.color !== undefined) horse.color = payload.color;
     if (Number.isFinite(payload.heightCm)) horse.heightCm = payload.heightCm;
     if (Number.isFinite(payload.weightKg)) horse.weightKg = payload.weightKg;
@@ -193,7 +209,7 @@ async function update(req, res, next) {
     if (assets.licenseImageUrl !== undefined) {
       horse.licenseImageUrl = assets.licenseImageUrl;
       horse.licenseImagePublicId = assets.licenseImagePublicId || "";
-      await destroyCloudinaryAsset(oldLicense);
+      await destroyCloudinaryAsset(oldLicense, "raw");
     }
 
     if (payload.healthStatus !== undefined) {
@@ -215,7 +231,7 @@ async function update(req, res, next) {
       err && err.message ? err.message : err,
     );
     if (isCloudinaryErrorMessage(err)) {
-      return fail(res, 400, "Chưa cấu hình Cloudinary để tải ảnh lên");
+      return fail(res, 400, isCloudinaryErrorMessage(err));
     }
     next(err);
   }

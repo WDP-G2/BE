@@ -7,9 +7,16 @@ function mapEvidence(item) {
   };
 }
 
+function formatDisplayCode(doc) {
+  var year = doc.createdAt ? new Date(doc.createdAt).getFullYear() : new Date().getFullYear();
+  var suffix = String(doc._id || "").slice(-3).toUpperCase() || "---";
+  return "V-" + year + "-" + suffix;
+}
+
 function mapViolation(doc) {
   return {
     id: String(doc._id),
+    displayCode: formatDisplayCode(doc),
     raceId: String(doc.raceId),
     tournamentId: String(doc.tournamentId),
     raceName: doc.raceName || "",

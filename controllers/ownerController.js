@@ -2,10 +2,86 @@ var mongoose = require("mongoose");
 var Tournament = require("../models/tournament");
 var Horse = require("../models/horse");
 var User = require("../models/user");
+var RoleApplication = require("../models/roleApplication");
 var JockeyInvitation = require("../models/jockeyInvitation");
 var { apiSuccess, apiError } = require("../utils/apiResponse");
 var { mapInvitation } = require("../utils/jockeyInvitationMapper");
+var { mapHorse } = require("../utils/horseMapper");
 var ownerService = require("../services/ownerService");
+var { buildOwnerResultsPayload } = require("../services/ownerResultsService");
+var { mapRaceRegistration } = require("../utils/raceRegistrationMapper");
+
+function buildOwnerProfileResponse(app, user) {
+  var profileData = (app && app.profileData) || {};
+  return {
+    id: app ? String(app._id) : null,
+    role: "OWNER",
+    status: app ? app.status : "APPROVED",
+    stableName: profileData.stableName || "",
+    address: profileData.address || "",
+    experienceYears: profileData.experienceYears ?? "",
+    bio: profileData.bio || "",
+    verificationDocumentUrl: profileData.verificationDocumentUrl || "",
+    fullName: (app && app.fullName) || user.fullName || user.name || user.username || "",
+    phone: (app && app.phone) || user.phone || "",
+    createdAt: app ? app.createdAt : null,
+    updatedAt: app ? app.updatedAt : null,
+  };
+}
+
+async function findApprovedOwnerApplication(userId) {
+  return RoleApplication.findOne({
+    userId: userId,
+    role: "OWNER",
+    status: "APPROVED",
+  })
+    .sort({ createdAt: -1 })
+    .exec();
+}
+
+async function getProfile(req, res) {
+  var app = await findApprovedOwnerApplication(req.user.id);
+  res.json(apiSuccess(buildOwnerProfileResponse(app, req.user)));
+}
+
+async function updateProfile(req, res) {
+  var stableName = req.body.stableName;
+  var address = req.body.address;
+  var experienceYears = req.body.experienceYears;
+  var bio = req.body.bio;
+  var phone = req.body.phone;
+
+  var setFields = {};
+  if (stableName !== undefined) setFields["profileData.stableName"] = String(stableName).trim();
+  if (address !== undefined) setFields["profileData.address"] = String(address).trim();
+  if (experienceYears !== undefined && experienceYears !== "") {
+    setFields["profileData.experienceYears"] = Number(experienceYears);
+  }
+  if (bio !== undefined) setFields["profileData.bio"] = String(bio).trim();
+  if (phone !== undefined) setFields.phone = String(phone).trim();
+
+  var app = await RoleApplication.findOneAndUpdate(
+    { userId: req.user.id, role: "OWNER", status: "APPROVED" },
+    { $set: setFields },
+    { new: true, sort: { createdAt: -1 } },
+  ).exec();
+
+  if (!app) {
+    throw apiError("Chưa có hồ sơ chủ ngựa được duyệt", 404);
+  }
+
+  if (phone !== undefined) {
+    await User.findByIdAndUpdate(req.user.id, { $set: { phone: String(phone).trim() } }).exec();
+    req.user.phone = String(phone).trim();
+  }
+
+  res.json(apiSuccess(buildOwnerProfileResponse(app, req.user), "Cập nhật hồ sơ chủ ngựa thành công"));
+}
+
+async function getResults(req, res) {
+  var payload = await buildOwnerResultsPayload(req.user.id);
+  res.json(apiSuccess(payload));
+}
 
 async function getDashboard(req, res) {
   var horses = await Horse.countDocuments({ ownerId: req.user.id }).exec();
@@ -24,22 +100,23 @@ async function getDashboard(req, res) {
 
 async function listHorses(req, res) {
   var horses = await Horse.find({ ownerId: req.user.id }).sort({ updatedAt: -1 }).exec();
-  res.json(apiSuccess(horses));
+  res.json(apiSuccess(horses.map(mapHorse)));
 }
 
 async function listRaceRegistrations(req, res) {
   var tournaments = await Tournament.find({ "registrations.ownerId": req.user.id }).exec();
   var rows = [];
-  tournaments.forEach(function (t) {
-    (t.registrations || []).forEach(function (reg) {
-      if (String(reg.ownerId) === String(req.user.id)) {
-        rows.push(Object.assign({}, reg.toObject(), {
-          id: String(reg._id),
-          tournamentId: String(t._id),
-          tournamentName: t.name,
-        }));
-      }
+  tournaments.forEach(function (tournament) {
+    (tournament.registrations || []).forEach(function (registration) {
+      if (String(registration.ownerId) !== String(req.user.id)) return;
+      var race = registration.raceId ? tournament.races.id(registration.raceId) : null;
+      rows.push(mapRaceRegistration(tournament, registration, race));
     });
+  });
+  rows.sort(function (a, b) {
+    var aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    var bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return bTime - aTime;
   });
   res.json(apiSuccess(rows));
 }
@@ -138,6 +215,9 @@ async function cancelJockeyInvitation(req, res) {
 
 module.exports = {
   getDashboard: getDashboard,
+  getResults: getResults,
+  getProfile: getProfile,
+  updateProfile: updateProfile,
   listHorses: listHorses,
   listRaceRegistrations: listRaceRegistrations,
   listJockeyInvitations: listJockeyInvitations,

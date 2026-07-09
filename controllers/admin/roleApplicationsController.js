@@ -38,7 +38,16 @@ async function approve(req, res) {
   app.reviewedAt = new Date();
   await app.save();
 
-  await User.findByIdAndUpdate(app.userId, { $set: { role: app.role } }).exec();
+  await User.findByIdAndUpdate(app.userId, {
+    $set: {
+      role: app.role,
+      pendingRole: null,
+      roleApprovalStatus: "APPROVED",
+      roleReviewReason: "",
+      roleReviewedBy: req.user.id,
+      roleReviewedAt: new Date(),
+    },
+  }).exec();
   res.json(apiSuccess(mapApplication(app), "Duyệt hồ sơ thành công"));
 }
 
@@ -51,6 +60,15 @@ async function reject(req, res) {
   app.reviewedBy = req.user.id;
   app.reviewedAt = new Date();
   await app.save();
+
+  await User.findByIdAndUpdate(app.userId, {
+    $set: {
+      roleApprovalStatus: "REJECTED",
+      roleReviewReason: app.rejectReason,
+      roleReviewedBy: req.user.id,
+      roleReviewedAt: new Date(),
+    },
+  }).exec();
 
   res.json(apiSuccess(mapApplication(app), "Từ chối hồ sơ thành công"));
 }

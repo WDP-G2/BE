@@ -21,6 +21,26 @@ var SystemSettingsSchema = new Schema(
     branding: { type: Schema.Types.Mixed, default: {} },
     emailTemplates: { type: Schema.Types.Mixed, default: {} },
     bettingEnabled: { type: Boolean, default: true },
+    violationTypes: {
+      type: [
+        {
+          code: { type: String, default: "" },
+          label: { type: String, default: "" },
+          active: { type: Boolean, default: true },
+        },
+      ],
+      default: undefined,
+    },
+    violationPenaltyRules: {
+      type: [
+        {
+          severity: { type: String, default: "" },
+          resultAction: { type: String, default: "" },
+          timePenaltyMillis: { type: Number, default: 0 },
+        },
+      ],
+      default: undefined,
+    },
   },
   { timestamps: true },
 );

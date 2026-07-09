@@ -7,7 +7,12 @@ var {
   getApprovedParticipants,
   mapParticipant,
   applyRefereeAssignment,
+  assertRaceReadyToStart,
+  prizeAmountForRank,
+  backfillResultFinalizedAt,
 } = require("../services/tournamentRaceService");
+var tm = require("../utils/tournamentMapper");
+var tournamentStatusSync = require("../services/tournamentStatusSync");
 var { mapInvitation } = require("../utils/refereeInvitationMapper");
 var { mapViolation } = require("../utils/violationMapper");
 var {
@@ -18,6 +23,7 @@ var refereeService = require("../services/refereeService");
 
 async function getDashboard(req, res) {
   var rows = await refereeService.getAssignedRaceRows(req.user.id);
+  await tournamentStatusSync.repairRaceStatusesForRows(rows);
   var now = Date.now();
   var summaries = rows.map(mapRaceSummary);
   var upcomingSummaries = summaries.filter(function (summary) {
@@ -67,6 +73,20 @@ async function getPendingCheckInCount(req, res) {
 
 async function listRaces(req, res) {
   var rows = await refereeService.getAssignedRaceRows(req.user.id);
+  var tournamentsToSave = new Map();
+  rows.forEach(function (row) {
+    if (row.tournament && backfillResultFinalizedAt(row.tournament)) {
+      tournamentsToSave.set(String(row.tournament._id), row.tournament);
+    }
+  });
+  if (tournamentsToSave.size) {
+    await Promise.all(
+      Array.from(tournamentsToSave.values()).map(function (tournament) {
+        return tournament.save();
+      }),
+    );
+  }
+  await tournamentStatusSync.repairRaceStatusesForRows(rows);
   res.json(apiSuccess(rows.map(mapRaceSummary)));
 }
 
@@ -105,6 +125,9 @@ async function updateParticipantGate(req, res) {
 async function checkInParticipant(req, res) {
   var ctx = await findRaceContext(req.params.raceId);
   if (!ctx) throw apiError("Không tìm thấy cuộc đua", 404);
+  if (tm.toRaceStatusCode(ctx.race.status) !== "SCHEDULED") {
+    throw apiError("Chỉ check-in được khi cuộc đua ở trạng thái Sắp diễn ra", 409);
+  }
   var reg = ctx.tournament.registrations.id(req.params.participantId);
   if (!reg) throw apiError("Không tìm thấy người tham gia", 404);
   reg.checkInStatus = req.body.status === "ABSENT" ? "ABSENT" : "CHECKED_IN";
@@ -126,8 +149,22 @@ async function startRace(req, res) {
       409,
     );
   }
-  if (!refereeService.RACE_STATUS_START_ALIASES[ctx.race.status]) {
-    throw apiError("Cuộc đua không ở trạng thái có thể bắt đầu", 409);
+
+  tournamentStatusSync.ensureRaceScheduledForStart(ctx.tournament, ctx.race);
+  if (ctx.tournament.isModified()) {
+    await ctx.tournament.save();
+  }
+
+  if (tm.toRaceStatusCode(ctx.race.status) !== "SCHEDULED") {
+    throw apiError(
+      "Chỉ có thể bắt đầu cuộc đua khi cuộc đua ở trạng thái Sắp diễn ra. Admin cần lên lịch giải trước.",
+      409,
+    );
+  }
+  try {
+    assertRaceReadyToStart(ctx.tournament, ctx.race);
+  } catch (err) {
+    throw apiError(err.message || "Cuộc đua chưa sẵn sàng để bắt đầu", err.status || 400);
   }
   ctx.race.status = "Đang chạy";
   await ctx.tournament.save();
@@ -146,22 +183,96 @@ async function finalizeResults(req, res) {
     throw apiError("Bạn không được phân công cuộc đua này", 403);
   }
   if (!refereeService.RACE_STATUS_ONGOING_ALIASES[ctx.race.status]) {
-    throw apiError("Cuộc đua chưa bắt đầu nên không thể chốt kết quả", 409);
+    if (ctx.tournament.status === "Đang diễn ra") {
+      if (tournamentStatusSync.repairRacesForOngoingTournament(ctx.tournament)) {
+        await ctx.tournament.save();
+      }
+      tournamentStatusSync.ensureRaceScheduledForStart(ctx.tournament, ctx.race);
+      if (tm.toRaceStatusCode(ctx.race.status) === "SCHEDULED") {
+        try {
+          assertRaceReadyToStart(ctx.tournament, ctx.race);
+          ctx.race.status = "Đang chạy";
+        } catch (err) {
+          throw apiError(err.message || "Cuộc đua chưa sẵn sàng để chốt kết quả", err.status || 400);
+        }
+      }
+    }
+    if (!refereeService.RACE_STATUS_ONGOING_ALIASES[ctx.race.status]) {
+      throw apiError("Only ongoing races can be finalized", 409);
+    }
   }
-  var results = Array.isArray(req.body.results) ? req.body.results : [];
-  ctx.race.results = results.map(function (item, index) {
-    return {
-      position: Number(item.rank || index + 1),
-      horseName: item.horseName || "—",
-      jockeyName: item.jockeyUsername || "",
-      time: item.finishTimeMillis ? String(item.finishTimeMillis) : "—",
+
+  var entries = Array.isArray(req.body.results) ? req.body.results : [];
+  if (!entries.length) {
+    throw apiError("Thiếu kết quả cuộc đua", 400);
+  }
+
+  var raceId = String(ctx.race._id);
+  var savedResults = [];
+
+  entries.forEach(function (item, index) {
+    var participantId = String(item.participantId || "").trim();
+    if (!participantId) {
+      throw apiError("Thiếu mã ngựa tham gia", 400);
+    }
+
+    var reg = ctx.tournament.registrations.id(participantId);
+    if (!reg || String(reg.raceId) !== raceId) {
+      throw apiError("Không tìm thấy ngựa tham gia trong cuộc đua", 400);
+    }
+
+    var isDisqualified = String(item.status || "").toUpperCase() === "DISQUALIFIED";
+    var rank = isDisqualified ? 0 : Number(item.rank || index + 1);
+    var finishMs = Number(item.finishTimeMillis || 0);
+
+    reg.participantStatus = isDisqualified ? "DISQUALIFIED" : "FINISHED";
+    if (!isDisqualified) {
+      reg.status = "Hoàn thành";
+    }
+    if (item.note) {
+      reg.notes = item.note;
+    }
+
+    savedResults.push({
+      position: isDisqualified ? 0 : rank,
+      horseName: reg.horseName || "—",
+      participantId: reg._id,
+      jockeyId: reg.jockeyId || null,
+      jockeyName: reg.jockeyName || "",
+      time: finishMs > 0 ? String(finishMs) : "—",
       points: 0,
       notes: item.note || "",
-    };
+    });
   });
+
+  savedResults.sort(function (first, second) {
+    if (!first.position) return 1;
+    if (!second.position) return -1;
+    return first.position - second.position;
+  });
+
+  ctx.race.results = savedResults;
   ctx.race.status = "Hoàn thành";
+  ctx.race.resultFinalizedAt = new Date();
   await ctx.tournament.save();
-  res.json(apiSuccess(ctx.race.results, "Chốt kết quả thành công"));
+
+  res.json(
+    apiSuccess(
+      savedResults.map(function (row) {
+        return {
+          participantId: String(row.participantId),
+          horseName: row.horseName,
+          jockeyUsername: row.jockeyName,
+          rank: row.position || null,
+          finishTimeMillis: row.time && row.time !== "—" ? Number(row.time) : 0,
+          status: row.position ? "FINISHED" : "DISQUALIFIED",
+          prizeAmount: prizeAmountForRank(ctx.race, row.position),
+          note: row.notes || "",
+        };
+      }),
+      "Chốt kết quả thành công",
+    ),
+  );
 }
 
 async function listInvitations(req, res) {

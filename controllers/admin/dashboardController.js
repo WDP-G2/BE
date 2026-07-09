@@ -4,21 +4,74 @@ var Horse = require("../../models/horse");
 var { WalletTransaction } = require("../../models/wallet");
 var { apiSuccess } = require("../../utils/apiResponse");
 
+var PAID_REGISTRATION_STATUSES = ["Đã duyệt", "Hoàn thành", "Đang chạy"];
+
+function findRaceInTournament(tournament, raceId) {
+  if (!raceId || !tournament || !tournament.races || !tournament.races.id) return null;
+  return tournament.races.id(raceId);
+}
+
+function sumEntryFeeRevenue(tournaments) {
+  var total = 0;
+  tournaments.forEach(function (t) {
+    (t.registrations || []).forEach(function (reg) {
+      if (!PAID_REGISTRATION_STATUSES.includes(reg.status)) return;
+      var race = findRaceInTournament(t, reg.raceId);
+      total += Number(race?.entryFee || 0);
+    });
+  });
+  return total;
+}
+
+function buildEntryFeeRevenueByMonth(tournaments, months, now) {
+  var rows = [];
+  var bucketMap = {};
+
+  for (var i = months - 1; i >= 0; i -= 1) {
+    var d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    var key = d.getFullYear() + "-" + d.getMonth();
+    var row = { month: "T" + (d.getMonth() + 1), value: 0 };
+    bucketMap[key] = row;
+    rows.push(row);
+  }
+
+  tournaments.forEach(function (t) {
+    (t.registrations || []).forEach(function (reg) {
+      if (!PAID_REGISTRATION_STATUSES.includes(reg.status)) return;
+      var race = findRaceInTournament(t, reg.raceId);
+      var fee = Number(race?.entryFee || 0);
+      if (!fee) return;
+
+      var bookedAt = reg.reviewedAt || reg.registeredAt || reg.createdAt;
+      if (!bookedAt) return;
+
+      var booked = new Date(bookedAt);
+      var key = booked.getFullYear() + "-" + booked.getMonth();
+      if (bucketMap[key]) bucketMap[key].value += fee;
+    });
+  });
+
+  return rows;
+}
+
 async function getSummary(req, res) {
   var tournaments = await Tournament.find({}).exec();
   var raceCount = 0;
   var registrationCount = 0;
-  var revenue = 0;
 
   tournaments.forEach(function (t) {
     raceCount += (t.races || []).length;
     registrationCount += (t.registrations || []).length;
-    (t.registrations || []).forEach(function (reg) {
-      if (reg.status === "Đã duyệt" || reg.status === "Hoàn thành") {
-        revenue += Number(t.config?.entryFee || 0);
-      }
-    });
   });
+
+  var entryFeeRevenue = sumEntryFeeRevenue(tournaments);
+
+  var feeAgg = await WalletTransaction.aggregate([
+    { $match: { type: "FEE" } },
+    { $group: { _id: null, total: { $sum: { $abs: "$amount" } } } },
+  ]).exec();
+  var feeRevenue = feeAgg[0]?.total || 0;
+  var revenue = feeRevenue > 0 ? feeRevenue : entryFeeRevenue;
 
   var activeUsers = await User.countDocuments({ active: { $ne: false } }).exec();
 
@@ -59,12 +112,16 @@ async function getTournamentRegistrations(req, res) {
 
 async function getRevenue(req, res) {
   var months = Math.max(1, Math.min(12, Number(req.query.months || 6)));
-  var txs = await WalletTransaction.find({ type: { $in: ["DEPOSIT", "FEE"] } })
-    .sort({ createdAt: -1 })
-    .limit(200)
+  var now = new Date();
+  var startMonth = new Date(now.getFullYear(), now.getMonth() - (months - 1), 1);
+
+  var txs = await WalletTransaction.find({
+    type: "FEE",
+    createdAt: { $gte: startMonth },
+  })
+    .sort({ createdAt: 1 })
     .exec();
 
-  var now = new Date();
   var rows = [];
   for (var i = months - 1; i >= 0; i -= 1) {
     var d = new Date(now.getFullYear(), now.getMonth() - i, 1);
@@ -78,6 +135,14 @@ async function getRevenue(req, res) {
         return sum + Math.abs(Number(tx.amount || 0));
       }, 0);
     rows.push({ month: label, value: total });
+  }
+
+  var hasFeeRevenue = rows.some(function (row) {
+    return row.value > 0;
+  });
+  if (!hasFeeRevenue) {
+    var tournaments = await Tournament.find({}).exec();
+    rows = buildEntryFeeRevenueByMonth(tournaments, months, now);
   }
 
   res.json(apiSuccess(rows));

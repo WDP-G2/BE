@@ -4,6 +4,10 @@ function findRaceAcrossTournaments(raceId) {
   return Tournament.findOne({ "races._id": raceId }).exec();
 }
 
+function findRaceAcrossTournamentsByRegistrationId(registrationId) {
+  return Tournament.findOne({ "registrations._id": registrationId }).exec();
+}
+
 function buildHorseBreedLabel(horse) {
   var breed = horse.breed || "Chưa rõ giống";
   if (!horse.birthDate) return breed;
@@ -34,6 +38,7 @@ function toTimeInput(value) {
 
 module.exports = {
   findRaceAcrossTournaments: findRaceAcrossTournaments,
+  findRaceAcrossTournamentsByRegistrationId: findRaceAcrossTournamentsByRegistrationId,
   buildHorseBreedLabel: buildHorseBreedLabel,
   toDateInput: toDateInput,
   toTimeInput: toTimeInput,

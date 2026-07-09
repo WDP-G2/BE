@@ -1,7 +1,7 @@
 var { BetMarket, Bet } = require("../models/betting");
 var User = require("../models/user");
 var { apiSuccess, apiError } = require("../utils/apiResponse");
-var { findRaceContext } = require("../services/tournamentRaceService");
+var { findRaceContext, prizeAmountForRank } = require("../services/tournamentRaceService");
 var { holdStake } = require("../services/walletLedger");
 var { mapMarket, mapBet } = require("../utils/bettingMapper");
 
@@ -15,16 +15,21 @@ async function getRaceResults(req, res) {
   var ctx = await findRaceContext(req.params.raceId);
   if (!ctx) throw apiError("Không tìm thấy cuộc đua", 404);
   var rows = (ctx.race.results || []).map(function (r, index) {
+    var finishTimeMillis = 0;
+    if (r.time && r.time !== "—") {
+      var parsed = Number(r.time);
+      finishTimeMillis = Number.isFinite(parsed) ? parsed : 0;
+    }
     return {
       id: String(r._id || index + 1),
-      participantId: null,
+      participantId: r.participantId ? String(r.participantId) : null,
       horseName: r.horseName,
       ownerUsername: "",
       jockeyUsername: r.jockeyName || "",
       rank: r.position,
-      finishTimeMillis: null,
-      status: "FINISHED",
-      prizeAmount: 0,
+      finishTimeMillis: finishTimeMillis,
+      status: r.position ? "FINISHED" : "DISQUALIFIED",
+      prizeAmount: prizeAmountForRank(ctx.race, r.position),
       note: r.notes || "",
     };
   });

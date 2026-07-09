@@ -2,6 +2,7 @@ var DEFAULT_RULES =
   "1. Ngựa phải có giấy chứng nhận sức khỏe hợp lệ.\n" +
   "2. Jockey phải có chứng chỉ FIA.\n" +
   "3. Kiểm tra doping bắt buộc.";
+var violationSettings = require("./violationSettingsMapper");
 
 function mapRaceDistance(value) {
   var meters = Number(typeof value === "object" && value != null ? value.meters : value);
@@ -17,6 +18,8 @@ function mapSettingsDoc(doc) {
   var plain = doc && doc.toObject ? doc.toObject() : doc || {};
   var fees = plain.fees || {};
   var distances = Array.isArray(plain.raceDistances) ? plain.raceDistances : [];
+  var violationTypes = violationSettings.readViolationTypes(plain);
+  var violationPenaltyRules = violationSettings.readViolationPenaltyRules(plain);
 
   return {
     id: String(plain._id || plain.id || ""),
@@ -37,6 +40,8 @@ function mapSettingsDoc(doc) {
     defaultTournamentRules: String(plain.rules || plain.defaultTournamentRules || DEFAULT_RULES),
     raceDistances: distances.map(mapRaceDistance).filter(Boolean),
     bettingEnabled: plain.bettingEnabled !== false,
+    violationTypes: violationSettings.mapViolationTypesForResponse(violationTypes),
+    violationPenaltyRules: violationSettings.mapViolationPenaltyRulesForResponse(violationPenaltyRules),
     createdAt: plain.createdAt || null,
     updatedAt: plain.updatedAt || null,
   };

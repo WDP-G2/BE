@@ -7,6 +7,7 @@ var {
   readActiveFlag,
 } = require("../../utils/systemSettingsMapper");
 var systemSettingsService = require("../../services/systemSettingsService");
+var violationSettings = require("../../utils/violationSettingsMapper");
 
 function bodyRules(body) {
   return body?.defaultTournamentRules ?? body?.rules ?? "";
@@ -66,6 +67,46 @@ async function updateRaceDistances(req, res) {
   doc.markModified("raceDistances");
   await doc.save();
   res.json(apiSuccess(mapSettingsDoc(doc), "Cập nhật cự ly thành công"));
+}
+
+async function updateViolationTypes(req, res) {
+  var doc = await systemSettingsService.getSettingsDoc();
+  var body = req.body || {};
+  var types = Array.isArray(body.types) ? body.types : [];
+
+  try {
+    doc.violationTypes = violationSettings.normalizeViolationTypes(types);
+  } catch (err) {
+    throw apiError(err.message || "Dữ liệu loại vi phạm không hợp lệ", err.status || 400);
+  }
+
+  doc.markModified("violationTypes");
+  await doc.save();
+  res.json(apiSuccess(mapSettingsDoc(doc), "Cập nhật loại vi phạm thành công"));
+}
+
+async function updateViolationRules(req, res) {
+  var doc = await systemSettingsService.getSettingsDoc();
+  var body = req.body || {};
+  var rules = Array.isArray(body.rules) ? body.rules : [];
+
+  try {
+    doc.violationPenaltyRules = violationSettings.normalizeViolationRules(rules);
+  } catch (err) {
+    throw apiError(err.message || "Cấu hình xử phạt không hợp lệ", err.status || 400);
+  }
+
+  doc.markModified("violationPenaltyRules");
+  await doc.save();
+  res.json(apiSuccess(mapSettingsDoc(doc), "Cập nhật cấu hình xử phạt thành công"));
+}
+
+async function getPublicViolationTypes(req, res) {
+  var doc = await systemSettingsService.getSettingsDoc();
+  var types = violationSettings.mapViolationTypesForResponse(
+    violationSettings.readViolationTypes(doc),
+  );
+  res.json(apiSuccess(types));
 }
 
 async function listProvinces(req, res) {
@@ -169,6 +210,9 @@ module.exports = {
   updateFees: updateFees,
   updateRules: updateRules,
   updateRaceDistances: updateRaceDistances,
+  updateViolationTypes: updateViolationTypes,
+  updateViolationRules: updateViolationRules,
+  getPublicViolationTypes: getPublicViolationTypes,
   listProvinces: listProvinces,
   createProvince: createProvince,
   updateProvince: updateProvince,

@@ -12,31 +12,20 @@ var {
 } = require("../../services/tournamentRaceService");
 var { mapInvitation } = require("../../utils/refereeInvitationMapper");
 var { mapTournament } = require("../../utils/tournamentMapper");
+var { mapRaceRegistration } = require("../../utils/raceRegistrationMapper");
 var { apiSuccess, apiError } = require("../../utils/apiResponse");
-
-function mapRegistration(tournament, reg) {
-  return {
-    id: String(reg._id),
-    tournamentId: String(tournament._id),
-    tournamentName: tournament.name,
-    raceId: reg.raceId ? String(reg.raceId) : null,
-    ownerId: reg.ownerId ? String(reg.ownerId) : null,
-    ownerName: reg.ownerName,
-    horseId: reg.horseId ? String(reg.horseId) : null,
-    horseName: reg.horseName,
-    jockeyId: reg.jockeyId ? String(reg.jockeyId) : null,
-    jockeyName: reg.jockeyName,
-    status: reg.status,
-    registeredAt: reg.registeredAt,
-  };
-}
 
 async function listTournamentRegistrations(req, res) {
   var tournament = await Tournament.findById(req.params.id).exec();
   if (!tournament) throw apiError("Không tìm thấy giải đấu", 404);
-  res.json(apiSuccess((tournament.registrations || []).map(function (reg) {
-    return mapRegistration(tournament, reg);
-  })));
+  res.json(
+    apiSuccess(
+      (tournament.registrations || []).map(function (reg) {
+        var race = reg.raceId ? tournament.races.id(reg.raceId) : null;
+        return mapRaceRegistration(tournament, reg, race);
+      }),
+    ),
+  );
 }
 
 async function approveRegistration(req, res) {
@@ -44,8 +33,12 @@ async function approveRegistration(req, res) {
   if (!tournament) throw apiError("Không tìm thấy đăng ký", 404);
   var reg = tournament.registrations.id(req.params.id);
   reg.status = "Đã duyệt";
+  reg.reviewNote = String(req.body?.note || "").trim();
+  reg.reviewedBy = req.user.id;
+  reg.reviewedAt = new Date();
   await tournament.save();
-  res.json(apiSuccess(mapRegistration(tournament, reg), "Duyệt đăng ký thành công"));
+  var race = reg.raceId ? tournament.races.id(reg.raceId) : null;
+  res.json(apiSuccess(mapRaceRegistration(tournament, reg, race), "Duyệt đăng ký thành công"));
 }
 
 async function rejectRegistration(req, res) {
@@ -53,9 +46,12 @@ async function rejectRegistration(req, res) {
   if (!tournament) throw apiError("Không tìm thấy đăng ký", 404);
   var reg = tournament.registrations.id(req.params.id);
   reg.status = "Từ chối";
-  if (req.body.note) reg.notes = req.body.note;
+  reg.reviewNote = String(req.body?.note || "Không đạt điều kiện duyệt").trim();
+  reg.reviewedBy = req.user.id;
+  reg.reviewedAt = new Date();
   await tournament.save();
-  res.json(apiSuccess(mapRegistration(tournament, reg), "Từ chối đăng ký thành công"));
+  var race = reg.raceId ? tournament.races.id(reg.raceId) : null;
+  res.json(apiSuccess(mapRaceRegistration(tournament, reg, race), "Từ chối đăng ký thành công"));
 }
 
 async function listParticipants(req, res) {
