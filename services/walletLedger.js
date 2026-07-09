@@ -108,6 +108,36 @@ async function holdStake(userId, amount, reference) {
   return wallet;
 }
 
+async function payReferee(refereeId, amount, reference) {
+  amount = Number(amount || 0);
+  if (!refereeId || amount <= 0) return null;
+
+  var wallet = await getUserWallet(refereeId);
+  await recordTransaction(wallet, {
+    type: "REFEREE_FEE",
+    amount: amount,
+    userId: refereeId,
+    referenceType: reference.referenceType || "RACE",
+    referenceId: reference.referenceId || "",
+    description: reference.description || "Thù lao trọng tài",
+  });
+
+  var sysWallet = await getSystemWallet();
+  sysWallet.availableBalance = Number(sysWallet.availableBalance || 0) - amount;
+  await sysWallet.save();
+  await WalletTransaction.create({
+    walletId: sysWallet._id,
+    type: "REFEREE_FEE",
+    amount: -amount,
+    balanceAfter: sysWallet.availableBalance,
+    referenceType: reference.referenceType || "RACE",
+    referenceId: reference.referenceId || "",
+    description: reference.description || "Chi trả thù lao trọng tài",
+  });
+
+  return wallet;
+}
+
 module.exports = {
   mapWallet: mapWallet,
   mapTransaction: mapTransaction,
@@ -115,4 +145,5 @@ module.exports = {
   getSystemWallet: getSystemWallet,
   recordTransaction: recordTransaction,
   holdStake: holdStake,
+  payReferee: payReferee,
 };

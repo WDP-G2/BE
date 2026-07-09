@@ -46,6 +46,7 @@ var WalletTransactionSchema = new Schema(
         "FEE",
         "HOLD",
         "RELEASE",
+        "REFEREE_FEE",
       ],
       required: true,
     },

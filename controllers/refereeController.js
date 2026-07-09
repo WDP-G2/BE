@@ -20,6 +20,7 @@ var {
   isCloudinaryError,
 } = require("../utils/cloudinaryUpload");
 var refereeService = require("../services/refereeService");
+var { payReferee } = require("../services/walletLedger");
 
 async function getDashboard(req, res) {
   var rows = await refereeService.getAssignedRaceRows(req.user.id);
@@ -254,6 +255,19 @@ async function finalizeResults(req, res) {
   ctx.race.results = savedResults;
   ctx.race.status = "Hoàn thành";
   ctx.race.resultFinalizedAt = new Date();
+
+  if (
+    ctx.race.refereePaymentStatus === "HELD" &&
+    Number(ctx.race.refereePaymentAmount || 0) > 0
+  ) {
+    await payReferee(ctx.race.refereeId, ctx.race.refereePaymentAmount, {
+      referenceType: "RACE",
+      referenceId: raceId,
+      description: "Thù lao trọng tài - " + (ctx.race.name || ""),
+    });
+    ctx.race.refereePaymentStatus = "PAID";
+  }
+
   await ctx.tournament.save();
 
   res.json(
