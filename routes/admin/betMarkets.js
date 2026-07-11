@@ -9,6 +9,7 @@ router.use(authenticate, requireRole("ADMIN"));
 router.get("/", asyncHandler(betMarketsController.list));
 router.put("/:id/open", asyncHandler(betMarketsController.open));
 router.put("/:id/close", asyncHandler(betMarketsController.close));
+router.put("/:id/settle", asyncHandler(betMarketsController.settle));
 router.get("/:id/bets", asyncHandler(betMarketsController.listBets));
 
 module.exports = router;
