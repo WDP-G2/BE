@@ -4,6 +4,7 @@ var { apiSuccess, apiError } = require("../utils/apiResponse");
 var { findRaceContext, prizeAmountForRank } = require("../services/tournamentRaceService");
 var { holdStake } = require("../services/walletLedger");
 var { mapMarket, mapBet } = require("../utils/bettingMapper");
+var systemSettingsService = require("../services/systemSettingsService");
 
 async function getPublicMarket(req, res) {
   var market = await BetMarket.findOne({ raceId: req.params.raceId, status: "OPEN" }).exec();
@@ -50,6 +51,11 @@ async function getMyBets(req, res) {
 }
 
 async function placeBet(req, res) {
+  var settings = await systemSettingsService.getSettingsDoc();
+  if (settings.bettingEnabled === false) {
+    throw apiError("Tính năng đặt cược hiện đang tắt", 403);
+  }
+
   var market = await BetMarket.findOne({ raceId: req.params.raceId, status: "OPEN" }).exec();
   if (!market) throw apiError("Market cược chưa mở", 400);
 
