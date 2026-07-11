@@ -138,6 +138,94 @@ async function payReferee(refereeId, amount, reference) {
   return wallet;
 }
 
+async function settleBetWin(userId, stakeAmount, payoutAmount, reference) {
+  var wallet = await getUserWallet(userId);
+  wallet.holdBalance = Math.max(0, Number(wallet.holdBalance || 0) - stakeAmount);
+  wallet.availableBalance = Number(wallet.availableBalance || 0) + payoutAmount;
+  await wallet.save();
+
+  await WalletTransaction.create({
+    walletId: wallet._id,
+    userId: userId,
+    type: "BET_PAYOUT",
+    amount: payoutAmount,
+    balanceAfter: wallet.availableBalance,
+    referenceType: reference.referenceType || "BET",
+    referenceId: reference.referenceId || "",
+    description: reference.description || "Thắng cược",
+  });
+
+  var profit = payoutAmount - stakeAmount;
+  if (profit > 0) {
+    var sysWallet = await getSystemWallet();
+    sysWallet.availableBalance = Number(sysWallet.availableBalance || 0) - profit;
+    await sysWallet.save();
+    await WalletTransaction.create({
+      walletId: sysWallet._id,
+      type: "BET_PAYOUT",
+      amount: -profit,
+      balanceAfter: sysWallet.availableBalance,
+      referenceType: reference.referenceType || "BET",
+      referenceId: reference.referenceId || "",
+      description: "Chi trả tiền thắng cược",
+    });
+  }
+
+  return wallet;
+}
+
+async function settleBetLoss(userId, stakeAmount, reference) {
+  var wallet = await getUserWallet(userId);
+  wallet.holdBalance = Math.max(0, Number(wallet.holdBalance || 0) - stakeAmount);
+  await wallet.save();
+
+  await WalletTransaction.create({
+    walletId: wallet._id,
+    userId: userId,
+    type: "BET_STAKE",
+    amount: 0,
+    balanceAfter: wallet.availableBalance,
+    referenceType: reference.referenceType || "BET",
+    referenceId: reference.referenceId || "",
+    description: reference.description || "Thua cược",
+  });
+
+  var sysWallet = await getSystemWallet();
+  sysWallet.availableBalance = Number(sysWallet.availableBalance || 0) + stakeAmount;
+  await sysWallet.save();
+  await WalletTransaction.create({
+    walletId: sysWallet._id,
+    type: "BET_STAKE",
+    amount: stakeAmount,
+    balanceAfter: sysWallet.availableBalance,
+    referenceType: reference.referenceType || "BET",
+    referenceId: reference.referenceId || "",
+    description: "Thu tiền cược thua",
+  });
+
+  return wallet;
+}
+
+async function refundStake(userId, stakeAmount, reference) {
+  var wallet = await getUserWallet(userId);
+  wallet.holdBalance = Math.max(0, Number(wallet.holdBalance || 0) - stakeAmount);
+  wallet.availableBalance = Number(wallet.availableBalance || 0) + stakeAmount;
+  await wallet.save();
+
+  await WalletTransaction.create({
+    walletId: wallet._id,
+    userId: userId,
+    type: "BET_REFUND",
+    amount: stakeAmount,
+    balanceAfter: wallet.availableBalance,
+    referenceType: reference.referenceType || "BET",
+    referenceId: reference.referenceId || "",
+    description: reference.description || "Hoàn tiền cược",
+  });
+
+  return wallet;
+}
+
 module.exports = {
   mapWallet: mapWallet,
   mapTransaction: mapTransaction,
@@ -146,4 +234,7 @@ module.exports = {
   recordTransaction: recordTransaction,
   holdStake: holdStake,
   payReferee: payReferee,
+  settleBetWin: settleBetWin,
+  settleBetLoss: settleBetLoss,
+  refundStake: refundStake,
 };
