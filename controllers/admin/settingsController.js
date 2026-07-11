@@ -8,6 +8,7 @@ var {
 } = require("../../utils/systemSettingsMapper");
 var systemSettingsService = require("../../services/systemSettingsService");
 var violationSettings = require("../../utils/violationSettingsMapper");
+var financeSettings = require("../../utils/financeSettingsMapper");
 
 function bodyRules(body) {
   return body?.defaultTournamentRules ?? body?.rules ?? "";
@@ -99,6 +100,61 @@ async function updateViolationRules(req, res) {
   doc.markModified("violationPenaltyRules");
   await doc.save();
   res.json(apiSuccess(mapSettingsDoc(doc), "Cập nhật cấu hình xử phạt thành công"));
+}
+
+async function getFinanceSettings(req, res) {
+  var doc = await systemSettingsService.getSettingsDoc();
+  res.json(apiSuccess(financeSettings.mapFinanceSettings(doc)));
+}
+
+async function updateFinanceSettings(req, res) {
+  var doc = await systemSettingsService.getSettingsDoc();
+  var body = req.body || {};
+
+  if (body.bettingEnabled !== undefined) {
+    doc.bettingEnabled = body.bettingEnabled !== false;
+  }
+
+  if (body.betWinningTaxPercent !== undefined) {
+    var taxPercent = Number(body.betWinningTaxPercent);
+    if (!Number.isFinite(taxPercent) || taxPercent < 0 || taxPercent > 100) {
+      throw apiError("Thuế thắng cược phải từ 0 đến 100", 400);
+    }
+    if (!doc.fees || typeof doc.fees !== "object") doc.fees = {};
+    doc.fees.winningTaxPercent = taxPercent;
+    doc.markModified("fees");
+  }
+
+  await doc.save();
+  res.json(apiSuccess(financeSettings.mapFinanceSettings(doc), "Cập nhật cấu hình đặt cược thành công"));
+}
+
+async function getRacePrizeShares(req, res) {
+  var doc = await systemSettingsService.getSettingsDoc();
+  var shares = financeSettings.readRacePrizeShares(doc);
+  res.json(apiSuccess({ shares: financeSettings.mapRacePrizeSharesForResponse(shares) }));
+}
+
+async function updateRacePrizeShares(req, res) {
+  var doc = await systemSettingsService.getSettingsDoc();
+  var body = req.body || {};
+
+  var normalized;
+  try {
+    normalized = financeSettings.normalizeRacePrizeShares(body.shares);
+  } catch (err) {
+    throw apiError(err.message || "Cấu hình chia thưởng không hợp lệ", err.status || 400);
+  }
+
+  doc.racePrizeShares = normalized;
+  doc.markModified("racePrizeShares");
+  await doc.save();
+  res.json(
+    apiSuccess(
+      { shares: financeSettings.mapRacePrizeSharesForResponse(normalized) },
+      "Cập nhật chia thưởng thành công",
+    ),
+  );
 }
 
 async function getPublicViolationTypes(req, res) {
@@ -212,6 +268,10 @@ module.exports = {
   updateRaceDistances: updateRaceDistances,
   updateViolationTypes: updateViolationTypes,
   updateViolationRules: updateViolationRules,
+  getFinanceSettings: getFinanceSettings,
+  updateFinanceSettings: updateFinanceSettings,
+  getRacePrizeShares: getRacePrizeShares,
+  updateRacePrizeShares: updateRacePrizeShares,
   getPublicViolationTypes: getPublicViolationTypes,
   listProvinces: listProvinces,
   createProvince: createProvince,

@@ -12,6 +12,10 @@ router.put("/system-settings/rules", asyncHandler(settingsController.updateRules
 router.put("/system-settings/race-distances", asyncHandler(settingsController.updateRaceDistances));
 router.put("/system-settings/violation-types", asyncHandler(settingsController.updateViolationTypes));
 router.put("/system-settings/violation-rules", asyncHandler(settingsController.updateViolationRules));
+router.get("/finance-settings", asyncHandler(settingsController.getFinanceSettings));
+router.put("/finance-settings", asyncHandler(settingsController.updateFinanceSettings));
+router.get("/finance-settings/race-prize-shares", asyncHandler(settingsController.getRacePrizeShares));
+router.put("/finance-settings/race-prize-shares", asyncHandler(settingsController.updateRacePrizeShares));
 router.get("/provinces", asyncHandler(settingsController.listProvinces));
 router.post("/provinces", asyncHandler(settingsController.createProvince));
 router.put("/provinces/:id", asyncHandler(settingsController.updateProvince));
