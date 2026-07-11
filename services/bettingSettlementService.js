@@ -1,6 +1,7 @@
 var { BetMarket, Bet } = require("../models/betting");
 var { findRaceContext } = require("./tournamentRaceService");
 var { settleBetWin, settleBetLoss, refundStake } = require("./walletLedger");
+var systemSettingsService = require("./systemSettingsService");
 var { apiError } = require("../utils/apiResponse");
 var tm = require("../utils/tournamentMapper");
 
@@ -26,6 +27,11 @@ async function settleMarket(marketId) {
 
   var winnerParticipantId = winnerResult ? String(winnerResult.participantId || "") : null;
 
+  var settingsDoc = await systemSettingsService.getSettingsDoc();
+  var taxPercent = Number(
+    settingsDoc.fees && settingsDoc.fees.winningTaxPercent != null ? settingsDoc.fees.winningTaxPercent : 0,
+  );
+
   var bets = await Bet.find({
     marketId: market._id,
     status: { $in: ["PLACED", "LOCKED"] },
@@ -45,16 +51,21 @@ async function settleMarket(marketId) {
       bet.grossProfitAmount = 0;
       bet.netProfitAmount = 0;
     } else if (String(bet.participantId) === winnerParticipantId) {
-      var payout = Number(bet.potentialPayoutAmount || bet.stakeAmount * 2);
+      var potential = Number(bet.potentialPayoutAmount || bet.stakeAmount * 2);
+      var grossProfit = potential - bet.stakeAmount;
+      var tax = Math.max(0, Math.round((grossProfit * taxPercent) / 100));
+      var netProfit = grossProfit - tax;
+      var actualPayout = bet.stakeAmount + netProfit;
       await settleBetWin(
         bet.userId,
         bet.stakeAmount,
-        payout,
+        actualPayout,
         Object.assign({ description: "Thắng cược " + (bet.horseName || "") }, reference),
       );
       bet.status = "WON";
-      bet.grossProfitAmount = payout - bet.stakeAmount;
-      bet.netProfitAmount = bet.grossProfitAmount - Number(bet.winningTaxAmount || 0);
+      bet.winningTaxAmount = tax;
+      bet.grossProfitAmount = grossProfit;
+      bet.netProfitAmount = netProfit;
     } else {
       await settleBetLoss(
         bet.userId,
