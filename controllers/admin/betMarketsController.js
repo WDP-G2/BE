@@ -1,5 +1,6 @@
 var { BetMarket, Bet } = require("../../models/betting");
 var { apiSuccess, apiError } = require("../../utils/apiResponse");
+var { settleMarket } = require("../../services/bettingSettlementService");
 
 function mapMarket(market) {
   return {
@@ -67,9 +68,15 @@ async function listBets(req, res) {
   res.json(apiSuccess(bets.map(mapBet)));
 }
 
+async function settle(req, res) {
+  var market = await settleMarket(req.params.id);
+  res.json(apiSuccess(mapMarket(market), "Đã chốt kết quả cược"));
+}
+
 module.exports = {
   list: list,
   open: open,
   close: close,
   listBets: listBets,
+  settle: settle,
 };
