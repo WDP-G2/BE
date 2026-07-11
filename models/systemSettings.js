@@ -41,6 +41,15 @@ var SystemSettingsSchema = new Schema(
       ],
       default: undefined,
     },
+    racePrizeShares: {
+      type: [
+        {
+          rank: { type: Number, required: true },
+          jockeyPercent: { type: Number, default: 50 },
+        },
+      ],
+      default: undefined,
+    },
   },
   { timestamps: true },
 );
