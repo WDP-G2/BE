@@ -5,14 +5,71 @@ var ResultSchema = new Schema(
   {
     position: { type: Number, required: true },
     horseName: { type: String, required: true },
+    horseId: { type: Schema.Types.ObjectId, ref: "Horse", default: null },
     participantId: { type: Schema.Types.ObjectId },
     jockeyId: { type: Schema.Types.ObjectId, ref: "User" },
     jockeyName: { type: String },
     time: { type: String },
     points: { type: Number, default: 0 },
     notes: { type: String },
+    source: { type: String, enum: ["MANUAL", "SIMULATION"], default: "MANUAL" },
+    simulationRunId: { type: String, default: null },
   },
   { _id: true },
+);
+
+var SimulationCheckpointSchema = new Schema(
+  {
+    at: { type: Number, required: true },
+    progress: { type: Number, required: true },
+  },
+  { _id: false },
+);
+
+var SimulationParticipantSchema = new Schema(
+  {
+    participantId: { type: Schema.Types.ObjectId, required: true },
+    horseId: { type: Schema.Types.ObjectId, ref: "Horse", required: true },
+    horseName: { type: String, required: true },
+    jockeyId: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    jockeyName: { type: String, default: "" },
+    gateNumber: { type: Number, required: true },
+    horseStarts: { type: Number, default: 0 },
+    horseWins: { type: Number, default: 0 },
+    horseWinRate: { type: Number, default: 0.5 },
+    jockeyStarts: { type: Number, default: 0 },
+    jockeyWins: { type: Number, default: 0 },
+    jockeyWinRate: { type: Number, default: 0.5 },
+    initialWinProbability: { type: Number, default: 0 },
+    luckValue: { type: Number, default: 0 },
+    rank: { type: Number, required: true },
+    finishTimeMillis: { type: Number, required: true },
+    checkpoints: { type: [SimulationCheckpointSchema], default: [] },
+  },
+  { _id: false },
+);
+
+var RaceSimulationSchema = new Schema(
+  {
+    status: {
+      type: String,
+      enum: ["NOT_STARTED", "GENERATED", "CONFIRMING", "CONFIRMED"],
+      default: "NOT_STARTED",
+    },
+    runId: { type: String, default: null },
+    algorithmVersion: { type: String, default: "v1" },
+    seed: { type: String, default: null },
+    historyWeight: { type: Number, default: 0.5 },
+    luckWeight: { type: Number, default: 0.5 },
+    generatedAt: { type: Date, default: null },
+    generatedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    playbackDurationMs: { type: Number, default: 28000 },
+    playbackEndsAt: { type: Date, default: null },
+    confirmedAt: { type: Date, default: null },
+    confirmedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    participants: { type: [SimulationParticipantSchema], default: [] },
+  },
+  { _id: false },
 );
 
 var RaceSchema = new Schema(
@@ -62,6 +119,7 @@ var RaceSchema = new Schema(
     },
     refereePaymentAmount: { type: Number, default: 0 },
     resultFinalizedAt: { type: Date, default: null },
+    simulation: { type: RaceSimulationSchema, default: function () { return {}; } },
   },
   { _id: true },
 );

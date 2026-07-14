@@ -1,5 +1,6 @@
 var RefereeInvitation = require("../models/refereeInvitation");
 var Violation = require("../models/violation");
+var Horse = require("../models/horse");
 var { apiSuccess, apiError } = require("../utils/apiResponse");
 var {
   findRaceContext,
@@ -20,6 +21,7 @@ var {
   isCloudinaryError,
 } = require("../utils/cloudinaryUpload");
 var refereeService = require("../services/refereeService");
+var raceSimulationService = require("../services/raceSimulationService");
 var { payReferee } = require("../services/walletLedger");
 
 async function getDashboard(req, res) {
@@ -183,6 +185,9 @@ async function finalizeResults(req, res) {
   if (!ctx.race.refereeId || String(ctx.race.refereeId) !== String(req.user.id)) {
     throw apiError("Bạn không được phân công cuộc đua này", 403);
   }
+  if (ctx.race.simulation && ctx.race.simulation.status && ctx.race.simulation.status !== "NOT_STARTED") {
+    throw apiError("Cuộc đua đã có mô phỏng; hãy xác nhận kết quả mô phỏng", 409);
+  }
   if (!refereeService.RACE_STATUS_ONGOING_ALIASES[ctx.race.status]) {
     if (ctx.tournament.status === "Đang diễn ra") {
       if (tournamentStatusSync.repairRacesForOngoingTournament(ctx.tournament)) {
@@ -236,6 +241,7 @@ async function finalizeResults(req, res) {
 
     savedResults.push({
       position: isDisqualified ? 0 : rank,
+      horseId: reg.horseId || null,
       horseName: reg.horseName || "—",
       participantId: reg._id,
       jockeyId: reg.jockeyId || null,
@@ -243,6 +249,7 @@ async function finalizeResults(req, res) {
       time: finishMs > 0 ? String(finishMs) : "—",
       points: 0,
       notes: item.note || "",
+      source: "MANUAL",
     });
   });
 
@@ -270,6 +277,14 @@ async function finalizeResults(req, res) {
 
   await ctx.tournament.save();
 
+  await Promise.allSettled(savedResults.filter(function (row) {
+    return row.horseId && row.position > 0;
+  }).map(function (row) {
+    return Horse.findByIdAndUpdate(row.horseId, {
+      $inc: { races: 1, wins: row.position === 1 ? 1 : 0 },
+    }).exec();
+  }));
+
   res.json(
     apiSuccess(
       savedResults.map(function (row) {
@@ -282,11 +297,27 @@ async function finalizeResults(req, res) {
           status: row.position ? "FINISHED" : "DISQUALIFIED",
           prizeAmount: prizeAmountForRank(ctx.race, row.position),
           note: row.notes || "",
+          source: row.source || "MANUAL",
+          simulationRunId: null,
         };
       }),
       "Chốt kết quả thành công",
     ),
   );
+}
+
+async function generateSimulation(req, res) {
+  var simulation = await raceSimulationService.generate(req.params.raceId, req.user.id);
+  res.status(201).json(apiSuccess(simulation, "Đã tạo mô phỏng cuộc đua"));
+}
+
+async function confirmSimulation(req, res) {
+  var results = await raceSimulationService.confirm(
+    req.params.raceId,
+    req.user.id,
+    req.body && req.body.runId,
+  );
+  res.json(apiSuccess(results, "Đã xác nhận kết quả mô phỏng"));
 }
 
 async function listInvitations(req, res) {
@@ -469,6 +500,8 @@ module.exports = {
   checkInParticipant: checkInParticipant,
   startRace: startRace,
   finalizeResults: finalizeResults,
+  generateSimulation: generateSimulation,
+  confirmSimulation: confirmSimulation,
   listInvitations: listInvitations,
   acceptInvitation: acceptInvitation,
   rejectInvitation: rejectInvitation,

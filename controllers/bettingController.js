@@ -5,6 +5,7 @@ var { findRaceContext, prizeAmountForRank } = require("../services/tournamentRac
 var { holdStake } = require("../services/walletLedger");
 var { mapMarket, mapBet } = require("../utils/bettingMapper");
 var systemSettingsService = require("../services/systemSettingsService");
+var raceSimulationService = require("../services/raceSimulationService");
 
 async function getPublicMarket(req, res) {
   var market = await BetMarket.findOne({ raceId: req.params.raceId, status: "OPEN" }).exec();
@@ -32,9 +33,16 @@ async function getRaceResults(req, res) {
       status: r.position ? "FINISHED" : "DISQUALIFIED",
       prizeAmount: prizeAmountForRank(ctx.race, r.position),
       note: r.notes || "",
+      source: r.source || "MANUAL",
+      simulationRunId: r.simulationRunId || null,
     };
   });
   res.json(apiSuccess(rows));
+}
+
+async function getRaceSimulation(req, res) {
+  var simulation = await raceSimulationService.get(req.params.raceId);
+  res.json(apiSuccess(simulation));
 }
 
 async function getBettableRaces(req, res) {
@@ -100,6 +108,7 @@ async function placeBet(req, res) {
 module.exports = {
   getPublicMarket: getPublicMarket,
   getRaceResults: getRaceResults,
+  getRaceSimulation: getRaceSimulation,
   getBettableRaces: getBettableRaces,
   getMyBets: getMyBets,
   placeBet: placeBet,

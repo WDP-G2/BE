@@ -7,6 +7,11 @@ var raceRegistrationsController = require("../controllers/raceRegistrationsContr
 
 router.get("/:raceId/bet-market", asyncHandler(bettingController.getPublicMarket));
 router.get("/:raceId/results", asyncHandler(bettingController.getRaceResults));
+router.get(
+  "/:raceId/simulation",
+  authenticate,
+  asyncHandler(bettingController.getRaceSimulation),
+);
 router.post(
   "/:raceId/registrations",
   authenticate,

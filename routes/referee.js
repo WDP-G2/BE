@@ -27,6 +27,11 @@ router.put(
   asyncHandler(refereeController.checkInParticipant),
 );
 router.put("/races/:raceId/start", asyncHandler(refereeController.startRace));
+router.post("/races/:raceId/simulation", asyncHandler(refereeController.generateSimulation));
+router.post(
+  "/races/:raceId/simulation/confirm",
+  asyncHandler(refereeController.confirmSimulation),
+);
 router.post("/races/:raceId/results/finalize", asyncHandler(refereeController.finalizeResults));
 router.get("/invitations", asyncHandler(refereeController.listInvitations));
 router.put("/invitations/:id/accept", asyncHandler(refereeController.acceptInvitation));
