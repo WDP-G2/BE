@@ -19,6 +19,14 @@ var JockeyInvitationSchema = new Schema(
     raceTime: { type: String, default: "" },
     location: { type: String, default: "" },
     reward: { type: Number, default: 0 },
+    rewardStatus: {
+      type: String,
+      enum: ["NONE", "HELD", "PAID", "REFUNDED"],
+      default: "NONE",
+      index: true,
+    },
+    rewardHoldOperationId: { type: Schema.Types.ObjectId, ref: "WalletOperation", default: null },
+    rewardSettlementOperationId: { type: Schema.Types.ObjectId, ref: "WalletOperation", default: null },
     message: { type: String, default: "" },
     responseNote: { type: String, default: "" },
     status: {

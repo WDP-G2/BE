@@ -31,6 +31,7 @@ function mapInvitation(doc) {
     remunerationAmount: obj.reward || 0,
     taxAmount: 0,
     jockeyPayoutAmount: obj.reward || 0,
+    rewardStatus: obj.rewardStatus || "NONE",
     message: obj.message || "",
     responseNote: obj.responseNote || "",
     createdAt: obj.createdAt || null,

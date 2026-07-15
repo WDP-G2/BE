@@ -60,6 +60,7 @@ function mapInvitation(doc) {
     raceTime: doc.raceTime || "",
     location: doc.location || "",
     reward: doc.reward || 0,
+    rewardStatus: doc.rewardStatus || "NONE",
     status: status,
     statusTone: statusTone,
     sentAt: toDateInput(doc.createdAt),

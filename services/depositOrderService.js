@@ -1,12 +1,9 @@
 var crypto = require("crypto");
 var { DepositOrder } = require("../models/wallet");
 var { apiError } = require("../utils/apiResponse");
-var {
-  getSystemWallet,
-  getUserWallet,
-  recordTransaction,
-} = require("./walletLedger");
+var { executeOperation } = require("./walletLedger");
 var zaloPay = require("./zaloPayService");
+var featureFlags = require("./financialFeatureFlags");
 
 function generateReferenceCode() {
   return "DEP-" + crypto.randomBytes(8).toString("hex").toUpperCase();
@@ -59,48 +56,37 @@ function validateAmount(amount) {
 }
 
 async function creditPaidOrder(order) {
+  featureFlags.assertEnabled("DEPOSIT");
   if (order.status === "PAID") return order;
 
   var referenceId = order.referenceCode || String(order._id);
   var metadata = order.metadata || "";
+  var amount = validateAmount(order.amount);
+  var postings = order.depositTarget === "SYSTEM"
+    ? [{ ownerType: "SYSTEM", transactionType: "DEPOSIT", availableDelta: amount, holdDelta: 0, description: "Nạp quỹ hệ thống" }]
+    : [
+      { ownerType: "USER", userId: order.userId, transactionType: "DEPOSIT", availableDelta: amount, holdDelta: 0, description: "Nạp tiền vào ví" },
+      { ownerType: "SYSTEM", transactionType: "DEPOSIT", availableDelta: amount, holdDelta: 0, description: "Tiền thực nhận từ người dùng" },
+    ];
 
-  if (order.depositTarget === "SYSTEM") {
-    var systemWallet = await getSystemWallet();
-    await recordTransaction(systemWallet, {
-      userId: order.userId,
-      type: "DEPOSIT",
-      amount: order.amount,
-      referenceType: "DEPOSIT_ORDER",
-      referenceId: referenceId,
-      description: "Nạp quỹ hệ thống",
-    });
-  } else {
-    var userWallet = await getUserWallet(order.userId);
-    await recordTransaction(userWallet, {
-      userId: order.userId,
-      type: "DEPOSIT",
-      amount: order.amount,
-      referenceType: "DEPOSIT_ORDER",
-      referenceId: referenceId,
-      description: "Nạp tiền vào ví",
-    });
-
-    var adminWallet = await getSystemWallet();
-    await recordTransaction(adminWallet, {
-      userId: order.userId,
-      type: "DEPOSIT",
-      amount: order.amount,
-      referenceType: "DEPOSIT_ORDER",
-      referenceId: referenceId,
-      description: "Nạp tiền người dùng vào quỹ hệ thống",
-    });
-  }
-
-  order.status = "PAID";
-  order.paidAt = new Date();
-  order.metadata = metadata;
-  await order.save();
-  return order;
+  await executeOperation({
+    idempotencyKey: "deposit:" + (order.providerTransactionId || order.paymentLinkId || String(order._id)),
+    type: order.depositTarget === "SYSTEM" ? "TREASURY_DEPOSIT" : "USER_DEPOSIT",
+    referenceType: "DEPOSIT_ORDER",
+    referenceId: referenceId,
+    actorId: order.userId,
+    metadata: { provider: order.provider, providerTransactionId: order.providerTransactionId || "" },
+    postings: postings,
+    mutateDomain: async function (session, operation) {
+      var updated = await DepositOrder.findOneAndUpdate(
+        { _id: order._id, status: "PENDING" },
+        { $set: { status: "PAID", paidAt: new Date(), metadata: metadata, operationId: operation._id } },
+        { new: true, session: session },
+      ).exec();
+      if (!updated) throw apiError("Lệnh nạp không còn ở trạng thái chờ", 409);
+    },
+  });
+  return DepositOrder.findById(order._id).exec();
 }
 
 async function markOrderFailed(order, metadata) {

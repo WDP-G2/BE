@@ -60,43 +60,16 @@ function syncScheduledRaceStatuses(tournament) {
   return changed;
 }
 
-/** Revert races auto-set to "Đang diễn ra" without referee start. */
+/** Compatibility no-op: an ONGOING race must never be rewound implicitly. */
 function repairPrematureOngoingRaces(tournament) {
-  if (!tournament) return false;
-
-  var changed = false;
-  (tournament.races || []).forEach(function (race) {
-    if (
-      race.status === tm.RACE_STATUS_LABELS.ONGOING &&
-      !(race.results && race.results.length)
-    ) {
-      race.status = tm.RACE_STATUS_LABELS.SCHEDULED;
-      changed = true;
-    }
-  });
-
-  return changed;
+  return false;
 }
 
-/** Giải ONGOING: đưa race về SCHEDULED để trọng tài start/chốt kết quả. */
+/** Compatibility no-op: races operate independently after the tournament starts. */
 function repairRacesForOngoingTournament(tournament) {
   if (!tournament) return false;
   if (tm.toTournamentStatusCode(tournament.status) !== "ONGOING") return false;
-
-  var changed = repairPrematureOngoingRaces(tournament);
-
-  (tournament.races || []).forEach(function (race) {
-    var raceCode = tm.toRaceStatusCode(race.status);
-    if (
-      isPreScheduleRaceStatusCode(raceCode) &&
-      race.status !== tm.RACE_STATUS_LABELS.SCHEDULED
-    ) {
-      race.status = tm.RACE_STATUS_LABELS.SCHEDULED;
-      changed = true;
-    }
-  });
-
-  return changed;
+  return false;
 }
 
 function ensureRaceScheduledForStart(tournament, race) {
@@ -106,18 +79,7 @@ function ensureRaceScheduledForStart(tournament, race) {
     return tm.toRaceStatusCode(race.status);
   }
 
-  if (race.status === tm.RACE_STATUS_LABELS.ONGOING) {
-    race.status = tm.RACE_STATUS_LABELS.SCHEDULED;
-    return "SCHEDULED";
-  }
-
-  var raceCode = tm.toRaceStatusCode(race.status);
-  if (isPreScheduleRaceStatusCode(raceCode)) {
-    race.status = tm.RACE_STATUS_LABELS.SCHEDULED;
-    return "SCHEDULED";
-  }
-
-  return raceCode;
+  return tm.toRaceStatusCode(race.status);
 }
 
 function syncTournamentRaceStatuses(tournament, tournamentStatusCode) {
@@ -140,10 +102,7 @@ async function repairRaceStatusesForRows(rows) {
     if (!tournament) return;
 
     var tournamentCode = tm.toTournamentStatusCode(tournament.status);
-    var changed =
-      tournamentCode === "ONGOING"
-        ? repairRacesForOngoingTournament(tournament)
-        : syncTournamentRaceStatuses(tournament, tournamentCode);
+    var changed = syncTournamentRaceStatuses(tournament, tournamentCode);
 
     if (changed) {
       tournamentsToSave.set(String(tournament._id), tournament);

@@ -3,6 +3,8 @@ var Horse = require("../models/horse");
 var Tournament = require("../models/tournament");
 var JockeyInvitation = require("../models/jockeyInvitation");
 var { apiError } = require("../utils/apiResponse");
+var { executeOperation, asInteger } = require("./walletLedger");
+var featureFlags = require("./financialFeatureFlags");
 var {
   toDateInput,
   toTimeInput,
@@ -99,7 +101,7 @@ async function createInvitation(actingUser, payload) {
   var scheduledAt =
     race && race.scheduledAt ? new Date(race.scheduledAt) : null;
 
-  var invitation = await JockeyInvitation.create({
+  var invitationPayload = {
     ownerId: actingUser.id,
     ownerName: actingUser.fullName || actingUser.username || "",
     jockeyId: jockey._id,
@@ -122,7 +124,34 @@ async function createInvitation(actingUser, payload) {
         ? reward
         : race?.entryFee || tournament.config?.entryFee || 0,
     status: "Chờ xử lý",
+  };
+
+  invitationPayload.reward = asInteger(invitationPayload.reward, "Thù lao jockey");
+  if (invitationPayload.reward < 0) throw apiError("Thù lao jockey không được âm", 400);
+  if (invitationPayload.reward === 0) {
+    invitationPayload.rewardStatus = "NONE";
+    var zeroInvitation = await JockeyInvitation.create(invitationPayload);
+    return { invitation: zeroInvitation, horseBreedLabel: horseBreedLabel };
+  }
+
+  featureFlags.assertEnabled("INVITATION");
+
+  var requestKey = String(payload.idempotencyKey || payload._idempotencyKey || "").trim();
+  if (!requestKey) throw apiError("Thiếu Idempotency-Key", 400);
+  var result = await executeOperation({
+    idempotencyKey: "jockey:invite:" + actingUser.id + ":" + requestKey,
+    type: "JOCKEY_REWARD_HOLD",
+    referenceType: "JOCKEY_INVITATION",
+    referenceId: requestKey,
+    actorId: actingUser.id,
+    postings: [{ ownerType: "USER", userId: actingUser.id, transactionType: "JOCKEY_REWARD", availableDelta: -invitationPayload.reward, holdDelta: invitationPayload.reward, description: "Giữ thù lao khi gửi lời mời jockey" }],
+    mutateDomain: async function (session, operation) {
+      invitationPayload.rewardStatus = "HELD";
+      invitationPayload.rewardHoldOperationId = operation._id;
+      await JockeyInvitation.create([invitationPayload], { session: session });
+    },
   });
+  var invitation = await JockeyInvitation.findOne({ rewardHoldOperationId: result.operation._id }).exec();
 
   return { invitation: invitation, horseBreedLabel: horseBreedLabel };
 }
@@ -164,16 +193,70 @@ async function respondToInvitation(actingUser, invitationId, action) {
   }
 
   if (action === "accept") {
-    invitation.status = "Đã chấp nhận";
+    invitation = await JockeyInvitation.findOneAndUpdate(
+      { _id: invitation._id, status: "Chờ xử lý" },
+      { $set: { status: "Đã chấp nhận", respondedAt: new Date() } },
+      { new: true },
+    ).exec();
   } else if (action === "reject") {
-    invitation.status = "Đã từ chối";
+    if (invitation.rewardStatus === "HELD" && Number(invitation.reward || 0) > 0) {
+      var result = await executeOperation({
+        idempotencyKey: "jockey:invite:refund:" + invitation._id,
+        type: "JOCKEY_REWARD_REFUND",
+        referenceType: "JOCKEY_INVITATION",
+        referenceId: String(invitation._id),
+        actorId: actingUser.id,
+        postings: [{ ownerType: "USER", userId: invitation.ownerId, transactionType: "JOCKEY_REWARD", availableDelta: invitation.reward, holdDelta: -invitation.reward, description: "Hoàn thù lao do jockey từ chối" }],
+        mutateDomain: async function (session, operation) {
+          var updated = await JockeyInvitation.findOneAndUpdate(
+            { _id: invitation._id, status: "Chờ xử lý", rewardStatus: "HELD" },
+            { $set: { status: "Đã từ chối", respondedAt: new Date(), rewardStatus: "REFUNDED", rewardSettlementOperationId: operation._id } },
+            { new: true, session: session },
+          ).exec();
+          if (!updated) throw apiError("Lời mời đã được xử lý", 409);
+        },
+      });
+      invitation = await JockeyInvitation.findOne({ _id: invitation._id, rewardSettlementOperationId: result.operation._id }).exec();
+    } else {
+      invitation = await JockeyInvitation.findOneAndUpdate(
+        { _id: invitation._id, status: "Chờ xử lý" },
+        { $set: { status: "Đã từ chối", respondedAt: new Date() } },
+        { new: true },
+      ).exec();
+    }
   } else {
     throw apiError("action must be accept or reject", 400);
   }
 
-  invitation.respondedAt = new Date();
-  await invitation.save();
+  return invitation;
+}
 
+async function cancelInvitation(actingUser, invitationId) {
+  var invitation = await JockeyInvitation.findOne({ _id: invitationId, ownerId: actingUser.id }).exec();
+  if (!invitation) throw apiError("Không tìm thấy lời mời", 404);
+  if (invitation.status !== "Chờ xử lý") throw apiError("Chỉ có thể hủy lời mời đang chờ xử lý", 409);
+  if (invitation.rewardStatus === "HELD" && Number(invitation.reward || 0) > 0) {
+    var result = await executeOperation({
+      idempotencyKey: "jockey:invite:cancel:" + invitation._id,
+      type: "JOCKEY_REWARD_REFUND",
+      referenceType: "JOCKEY_INVITATION",
+      referenceId: String(invitation._id),
+      actorId: actingUser.id,
+      postings: [{ ownerType: "USER", userId: invitation.ownerId, transactionType: "JOCKEY_REWARD", availableDelta: invitation.reward, holdDelta: -invitation.reward, description: "Hoàn thù lao do hủy lời mời" }],
+      mutateDomain: async function (session, operation) {
+        var updated = await JockeyInvitation.findOneAndUpdate(
+          { _id: invitation._id, status: "Chờ xử lý", rewardStatus: "HELD" },
+          { $set: { status: "Đã hủy", cancelledAt: new Date(), rewardStatus: "REFUNDED", rewardSettlementOperationId: operation._id } },
+          { new: true, session: session },
+        ).exec();
+        if (!updated) throw apiError("Lời mời đã được xử lý", 409);
+      },
+    });
+    return JockeyInvitation.findOne({ _id: invitation._id, rewardSettlementOperationId: result.operation._id }).exec();
+  }
+  invitation.status = "Đã hủy";
+  invitation.cancelledAt = new Date();
+  await invitation.save();
   return invitation;
 }
 
@@ -183,4 +266,5 @@ module.exports = {
   listForJockey: listForJockey,
   listForOwner: listForOwner,
   respondToInvitation: respondToInvitation,
+  cancelInvitation: cancelInvitation,
 };

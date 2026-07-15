@@ -1,7 +1,7 @@
 var Tournament = require("../../models/tournament");
 var User = require("../../models/user");
 var Horse = require("../../models/horse");
-var { WalletTransaction } = require("../../models/wallet");
+var { Wallet, WalletTransaction } = require("../../models/wallet");
 var { apiSuccess } = require("../../utils/apiResponse");
 
 var PAID_REGISTRATION_STATUSES = ["Đã duyệt", "Hoàn thành", "Đang chạy"];
@@ -16,8 +16,9 @@ function sumEntryFeeRevenue(tournaments) {
   tournaments.forEach(function (t) {
     (t.registrations || []).forEach(function (reg) {
       if (!PAID_REGISTRATION_STATUSES.includes(reg.status)) return;
+      if (reg.paymentStatus && reg.paymentStatus !== "CHARGED" && reg.paymentStatus !== "FORFEITED") return;
       var race = findRaceInTournament(t, reg.raceId);
-      total += Number(race?.entryFee || 0);
+      total += Number(reg.entryFeeAmount != null ? reg.entryFeeAmount : race?.entryFee || 0);
     });
   });
   return total;
@@ -39,7 +40,7 @@ function buildEntryFeeRevenueByMonth(tournaments, months, now) {
     (t.registrations || []).forEach(function (reg) {
       if (!PAID_REGISTRATION_STATUSES.includes(reg.status)) return;
       var race = findRaceInTournament(t, reg.raceId);
-      var fee = Number(race?.entryFee || 0);
+      var fee = Number(reg.entryFeeAmount != null ? reg.entryFeeAmount : race?.entryFee || 0);
       if (!fee) return;
 
       var bookedAt = reg.reviewedAt || reg.registeredAt || reg.createdAt;
@@ -67,13 +68,19 @@ async function getSummary(req, res) {
   var entryFeeRevenue = sumEntryFeeRevenue(tournaments);
 
   var feeAgg = await WalletTransaction.aggregate([
-    { $match: { type: "FEE" } },
-    { $group: { _id: null, total: { $sum: { $abs: "$amount" } } } },
+    { $match: { type: { $in: ["FEE", "ENTRY_FEE"] }, amount: { $gt: 0 } } },
+    { $group: { _id: null, total: { $sum: "$amount" } } },
   ]).exec();
   var feeRevenue = feeAgg[0]?.total || 0;
   var revenue = feeRevenue > 0 ? feeRevenue : entryFeeRevenue;
 
   var activeUsers = await User.countDocuments({ active: { $ne: false } }).exec();
+  var balanceRows = await Wallet.aggregate([
+    { $match: { status: { $in: ["ACTIVE", "FROZEN"] } } },
+    { $group: { _id: "$ownerType", available: { $sum: "$availableBalance" }, hold: { $sum: "$holdBalance" } } },
+  ]).exec();
+  var treasury = balanceRows.find(function (row) { return row._id === "SYSTEM"; }) || { available: 0, hold: 0 };
+  var liabilities = balanceRows.find(function (row) { return row._id === "USER"; }) || { available: 0, hold: 0 };
 
   res.json(
     apiSuccess({
@@ -85,6 +92,8 @@ async function getSummary(req, res) {
       race: { value: raceCount, delta: "+0%" },
       activeUser: { value: activeUsers, delta: "+0%" },
       revenueMetric: { value: revenue, delta: "+0%" },
+      treasuryAsset: Number(treasury.available || 0) + Number(treasury.hold || 0),
+      userLiability: Number(liabilities.available || 0) + Number(liabilities.hold || 0),
     }),
   );
 }
@@ -116,7 +125,8 @@ async function getRevenue(req, res) {
   var startMonth = new Date(now.getFullYear(), now.getMonth() - (months - 1), 1);
 
   var txs = await WalletTransaction.find({
-    type: "FEE",
+    type: { $in: ["FEE", "ENTRY_FEE"] },
+    amount: { $gt: 0 },
     createdAt: { $gte: startMonth },
   })
     .sort({ createdAt: 1 })
@@ -132,7 +142,7 @@ async function getRevenue(req, res) {
         return created.getFullYear() === d.getFullYear() && created.getMonth() === d.getMonth();
       })
       .reduce(function (sum, tx) {
-        return sum + Math.abs(Number(tx.amount || 0));
+        return sum + Number(tx.amount || 0);
       }, 0);
     rows.push({ month: label, value: total });
   }

@@ -1,10 +1,9 @@
 var mongoose = require("mongoose");
 var Tournament = require("../models/tournament");
-var tournamentStatusSync = require("./tournamentStatusSync");
-var tm = require("../utils/tournamentMapper");
 var Province = require("../models/province");
 var User = require("../models/user");
 var RefereeSalaryConfig = require("../models/refereeSalaryConfig");
+var tm = require("../utils/tournamentMapper");
 var { toRaceStatusLabel, buildPrizesFromBody } = require("../utils/tournamentMapper");
 var { toDate, toNumber } = require("./tournamentService");
 
@@ -20,22 +19,6 @@ async function findRaceContext(raceId, options) {
 
   var race = tournament.races.id(String(raceId));
   if (!race) return null;
-
-  var shouldRepair = !options || options.repair !== false;
-  if (shouldRepair && tm.toTournamentStatusCode(tournament.status) === "ONGOING") {
-    var needsSave = tournamentStatusSync.repairRacesForOngoingTournament(tournament);
-    var previousStatus = race.status;
-    tournamentStatusSync.ensureRaceScheduledForStart(tournament, race);
-    if (race.status !== previousStatus) {
-      needsSave = true;
-    }
-    if (backfillResultFinalizedAt(tournament)) {
-      needsSave = true;
-    }
-    if (needsSave) {
-      await tournament.save();
-    }
-  }
 
   return { tournament: tournament, race: race };
 }
@@ -160,9 +143,13 @@ function mapRaceSummary(ctx) {
     checkedInCount: checkedInCount,
     pendingCheckInCount: participants.length - checkedInCount,
     resultFinalizedAt: resultFinalizedAt,
+    resultFinalizedBy: race.resultFinalizedBy ? String(race.resultFinalizedBy) : null,
     winnerName: winnerResult ? winnerResult.horseName : null,
     totalPrizeAmount: sumRacePrizePayouts(race),
     prizes: tm.mapPrizes(race.prizes),
+    financialSettlementStatus: race.financialSettlementStatus || "NONE",
+    financialSettledAt: race.financialSettledAt || null,
+    financialSettlementSnapshot: race.financialSettlementSnapshot || null,
   };
 }
 
@@ -235,9 +222,6 @@ function assertRaceReadyToStart(tournament, race) {
   }).length;
   var configuredMin = Number(race.minHorses || 0);
   var minRequired = configuredMin > 0 ? configuredMin : 1;
-  if (minRequired > participants.length) {
-    minRequired = participants.length;
-  }
   if (checkedInCount < minRequired) {
     var minErr = new Error("Race does not have enough checked-in participants");
     minErr.status = 400;
@@ -293,6 +277,18 @@ async function resolveRefereeAssignment(rawValue) {
 }
 
 async function applyRaceFieldsUpdate(race, body) {
+  if (race.financialSettlementStatus === "SETTLED") {
+    var lockedErr = new Error("Kết quả và cấu hình race đã khóa sau quyết toán tài chính");
+    lockedErr.status = 409;
+    lockedErr.expose = true;
+    throw lockedErr;
+  }
+  if (body.status !== undefined && toRaceStatusLabel(body.status, race.status) === "Đã hủy") {
+    var cancelErr = new Error("Hủy race phải đi qua API cancellation để hoàn tiền");
+    cancelErr.status = 409;
+    cancelErr.expose = true;
+    throw cancelErr;
+  }
   if (body.name !== undefined) race.name = body.name;
   if (body.raceNumber !== undefined)
     race.raceNumber = toNumber(body.raceNumber, race.raceNumber);

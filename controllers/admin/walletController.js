@@ -4,23 +4,13 @@ var {
   getSystemWallet,
   mapWallet,
   mapTransaction,
-  recordTransaction,
 } = require("../../services/walletLedger");
 var depositOrderService = require("../../services/depositOrderService");
+var withdrawalService = require("../../services/withdrawalService");
+var walletReconciliationService = require("../../services/walletReconciliationService");
 
 function mapWithdrawal(item) {
-  return {
-    id: String(item._id),
-    userId: item.userId ? String(item.userId) : null,
-    amount: Number(item.amount || 0),
-    status: item.status,
-    bankAccount: item.bankAccount,
-    bankName: item.bankName,
-    accountName: item.accountName,
-    note: item.note,
-    createdAt: item.createdAt,
-    updatedAt: item.updatedAt,
-  };
+  return withdrawalService.mapWithdrawal(item);
 }
 
 async function getWallet(req, res) {
@@ -62,31 +52,36 @@ async function listWithdrawals(req, res) {
 }
 
 async function createWithdrawal(req, res) {
-  var amount = Number(req.body.amount || 0);
-  if (amount <= 0) throw apiError("Số tiền không hợp lệ", 400);
-
-  var wallet = await getSystemWallet();
-  var item = await Withdrawal.create({
-    walletId: wallet._id,
-    userId: req.user.id,
-    amount: amount,
-    status: "PAID",
+  var item = await withdrawalService.createTreasuryWithdrawal({
+    adminId: req.user.id,
+    amount: req.body.amount,
+    idempotencyKey: req.get("Idempotency-Key"),
     bankAccount: req.body.bankAccount || "",
     bankName: req.body.bankName || "",
     accountName: req.body.accountName || "",
     note: req.body.note || "Admin rút quỹ hệ thống",
   });
-
-  await recordTransaction(wallet, {
-    userId: req.user.id,
-    type: "ADMIN_WITHDRAW",
-    amount: -amount,
-    referenceType: "WITHDRAWAL",
-    referenceId: String(item._id),
-    description: "Rút quỹ hệ thống",
-  });
-
   res.status(201).json(apiSuccess(mapWithdrawal(item), "Rút quỹ thành công"));
+}
+
+async function approveWithdrawal(req, res) {
+  var item = await withdrawalService.approveWithdrawal(req.params.id, req.user.id, req.get("Idempotency-Key"));
+  res.json(apiSuccess(mapWithdrawal(item), "Đã duyệt yêu cầu rút tiền"));
+}
+
+async function rejectWithdrawal(req, res) {
+  var item = await withdrawalService.rejectWithdrawal(req.params.id, req.user.id, req.get("Idempotency-Key"), req.body.note);
+  res.json(apiSuccess(mapWithdrawal(item), "Đã từ chối và hoàn số dư"));
+}
+
+async function markWithdrawalPaid(req, res) {
+  var item = await withdrawalService.markWithdrawalPaid(req.params.id, req.user.id, req.get("Idempotency-Key"));
+  res.json(apiSuccess(mapWithdrawal(item), "Đã xác nhận chi tiền"));
+}
+
+async function getReconciliation(req, res) {
+  var report = await walletReconciliationService.reconcile();
+  res.json(apiSuccess(report));
 }
 
 async function payDepositOrderWithCard(req, res) {
@@ -104,4 +99,8 @@ module.exports = {
   payDepositOrderWithCard: payDepositOrderWithCard,
   listWithdrawals: listWithdrawals,
   createWithdrawal: createWithdrawal,
+  approveWithdrawal: approveWithdrawal,
+  rejectWithdrawal: rejectWithdrawal,
+  markWithdrawalPaid: markWithdrawalPaid,
+  getReconciliation: getReconciliation,
 };

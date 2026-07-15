@@ -9,6 +9,7 @@ router.use(authenticate, requireRole("ADMIN"));
 router.get("/tournaments/:id/race-registrations", asyncHandler(racesController.listTournamentRegistrations));
 router.put("/race-registrations/:id/approve", asyncHandler(racesController.approveRegistration));
 router.put("/race-registrations/:id/reject", asyncHandler(racesController.rejectRegistration));
+router.put("/races/:raceId/cancel", asyncHandler(racesController.cancelRace));
 router.get("/races/:raceId/participants", asyncHandler(racesController.listParticipants));
 router.put("/races/:raceId/referee", asyncHandler(racesController.assignReferee));
 router.post("/races/:raceId/referee-invitations", asyncHandler(racesController.createRefereeInvitation));

@@ -10,7 +10,8 @@ function respondWithError(res, err, next) {
 
 async function create(req, res, next) {
   try {
-    var result = await invitationService.createInvitation(req.user, req.body);
+    var payload = Object.assign({}, req.body, { _idempotencyKey: req.get("Idempotency-Key") });
+    var result = await invitationService.createInvitation(req.user, payload);
     var mapped = mapInvitation(result.invitation);
     mapped.horseBread = result.horseBreedLabel;
     res.status(201).json(mapped);

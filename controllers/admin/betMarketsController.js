@@ -69,6 +69,7 @@ async function listBets(req, res) {
 }
 
 async function settle(req, res) {
+  if (!req.get("Idempotency-Key")) throw apiError("Thiếu Idempotency-Key", 400);
   var market = await settleMarket(req.params.id);
   res.json(apiSuccess(mapMarket(market), "Đã chốt kết quả cược"));
 }

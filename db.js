@@ -5,6 +5,13 @@ var mongoose = require("mongoose");
 var uri = process.env.MONGODB_URI || "";
 
 mongoose.set("strictQuery", true);
+// Production indexes are created explicitly by the audited wallet migration.
+mongoose.set(
+  "autoIndex",
+  process.env.MONGOOSE_AUTO_INDEX == null
+    ? process.env.NODE_ENV !== "production"
+    : process.env.MONGOOSE_AUTO_INDEX === "true",
+);
 
 /** Windows: resolver mặc định có thể từ chối querySrv → dùng DNS công cộng */
 if (uri.startsWith("mongodb+srv://")) {

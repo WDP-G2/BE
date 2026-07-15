@@ -14,6 +14,8 @@ var { mapInvitation } = require("../../utils/refereeInvitationMapper");
 var { mapTournament } = require("../../utils/tournamentMapper");
 var { mapRaceRegistration } = require("../../utils/raceRegistrationMapper");
 var { apiSuccess, apiError } = require("../../utils/apiResponse");
+var registrationFinancialService = require("../../services/registrationFinancialService");
+var cancelRaceService = require("../../services/cancelRaceService");
 
 async function listTournamentRegistrations(req, res) {
   var tournament = await Tournament.findById(req.params.id).exec();
@@ -29,29 +31,13 @@ async function listTournamentRegistrations(req, res) {
 }
 
 async function approveRegistration(req, res) {
-  var tournament = await Tournament.findOne({ "registrations._id": req.params.id }).exec();
-  if (!tournament) throw apiError("Không tìm thấy đăng ký", 404);
-  var reg = tournament.registrations.id(req.params.id);
-  reg.status = "Đã duyệt";
-  reg.reviewNote = String(req.body?.note || "").trim();
-  reg.reviewedBy = req.user.id;
-  reg.reviewedAt = new Date();
-  await tournament.save();
-  var race = reg.raceId ? tournament.races.id(reg.raceId) : null;
-  res.json(apiSuccess(mapRaceRegistration(tournament, reg, race), "Duyệt đăng ký thành công"));
+  var ctx = await registrationFinancialService.approve({ registrationId: req.params.id, adminId: req.user.id, idempotencyKey: req.get("Idempotency-Key"), note: String(req.body?.note || "").trim() });
+  res.json(apiSuccess(mapRaceRegistration(ctx.tournament, ctx.registration, ctx.race), "Duyệt đăng ký thành công"));
 }
 
 async function rejectRegistration(req, res) {
-  var tournament = await Tournament.findOne({ "registrations._id": req.params.id }).exec();
-  if (!tournament) throw apiError("Không tìm thấy đăng ký", 404);
-  var reg = tournament.registrations.id(req.params.id);
-  reg.status = "Từ chối";
-  reg.reviewNote = String(req.body?.note || "Không đạt điều kiện duyệt").trim();
-  reg.reviewedBy = req.user.id;
-  reg.reviewedAt = new Date();
-  await tournament.save();
-  var race = reg.raceId ? tournament.races.id(reg.raceId) : null;
-  res.json(apiSuccess(mapRaceRegistration(tournament, reg, race), "Từ chối đăng ký thành công"));
+  var ctx = await registrationFinancialService.reject({ registrationId: req.params.id, adminId: req.user.id, note: String(req.body?.note || "Không đạt điều kiện duyệt").trim() });
+  res.json(apiSuccess(mapRaceRegistration(ctx.tournament, ctx.registration, ctx.race), "Từ chối đăng ký thành công"));
 }
 
 async function listParticipants(req, res) {
@@ -211,10 +197,22 @@ async function deleteRace(req, res) {
   var ctx = await findRaceContext(req.params.raceId);
   if (!ctx) throw apiError("Không tìm thấy cuộc đua", 404);
 
+  var hasRegistration = (ctx.tournament.registrations || []).some(function (reg) { return String(reg.raceId || "") === String(ctx.race._id); });
+  var hasMarket = await BetMarket.exists({ raceId: ctx.race._id });
+  if (hasRegistration || hasMarket || ctx.race.financialSettlementStatus !== "NONE") {
+    throw apiError("Không thể xóa race đã có nghĩa vụ tài chính; hãy dùng luồng hủy race", 409);
+  }
+
   ctx.race.deleteOne();
   await ctx.tournament.save();
 
   res.json(apiSuccess(mapTournament(ctx.tournament)));
+}
+
+async function cancelRace(req, res) {
+  if (!req.get("Idempotency-Key")) throw apiError("Thiếu Idempotency-Key", 400);
+  var ctx = await cancelRaceService.cancelRace(req.params.raceId, req.user.id, req.body && req.body.reason);
+  res.json(apiSuccess(mapTournament(ctx.tournament), "Đã hủy race và hoàn các nghĩa vụ tài chính"));
 }
 
 async function getRefereePayment(req, res) {
@@ -249,5 +247,6 @@ module.exports = {
   createBetMarket: createBetMarket,
   updateRace: updateRace,
   deleteRace: deleteRace,
+  cancelRace: cancelRace,
   getRefereePayment: getRefereePayment,
 };

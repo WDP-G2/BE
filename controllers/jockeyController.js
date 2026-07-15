@@ -2,6 +2,7 @@ var Tournament = require("../models/tournament");
 var JockeyInvitation = require("../models/jockeyInvitation");
 var RoleApplication = require("../models/roleApplication");
 var { apiSuccess, apiError } = require("../utils/apiResponse");
+var invitationService = require("../services/invitationService");
 var { mapInvitation } = require("../utils/jockeyInvitationMapper");
 var {
   buildJockeyPerformancePayload,
@@ -203,23 +204,12 @@ async function listInvitations(req, res) {
 }
 
 async function acceptInvitation(req, res) {
-  var row = await JockeyInvitation.findOneAndUpdate(
-    { _id: req.params.id, jockeyId: req.user.id },
-    { $set: { status: "Đã chấp nhận", respondedAt: new Date() } },
-    { new: true },
-  ).exec();
-  if (!row) throw apiError("Không tìm thấy lời mời", 404);
+  var row = await invitationService.respondToInvitation(req.user, req.params.id, "accept");
   res.json(apiSuccess(mapInvitation(row)));
 }
 
 async function rejectInvitation(req, res) {
-  var responseNote = (req.body && req.body.note) || "";
-  var row = await JockeyInvitation.findOneAndUpdate(
-    { _id: req.params.id, jockeyId: req.user.id },
-    { $set: { status: "Đã từ chối", respondedAt: new Date(), responseNote } },
-    { new: true },
-  ).exec();
-  if (!row) throw apiError("Không tìm thấy lời mời", 404);
+  var row = await invitationService.respondToInvitation(req.user, req.params.id, "reject");
   res.json(apiSuccess(mapInvitation(row)));
 }
 

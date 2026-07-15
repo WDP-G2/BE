@@ -22,7 +22,8 @@ var {
 } = require("../utils/cloudinaryUpload");
 var refereeService = require("../services/refereeService");
 var raceSimulationService = require("../services/raceSimulationService");
-var { payReferee } = require("../services/walletLedger");
+var raceFinancialSettlementService = require("../services/raceFinancialSettlementService");
+var raceLifecycleService = require("../services/raceLifecycleService");
 
 async function getDashboard(req, res) {
   var rows = await refereeService.getAssignedRaceRows(req.user.id);
@@ -146,31 +147,42 @@ async function startRace(req, res) {
   if (!ctx.race.refereeId || String(ctx.race.refereeId) !== String(req.user.id)) {
     throw apiError("Bạn không được phân công cuộc đua này", 403);
   }
-  if (ctx.tournament.status !== "Đang diễn ra") {
+  if (tm.toTournamentStatusCode(ctx.tournament.status) !== "ONGOING") {
     throw apiError(
       "Giải đấu chưa được bắt đầu. Vui lòng chờ ban tổ chức chuyển giải sang trạng thái Đang diễn ra.",
-      409,
+      400,
     );
-  }
-
-  tournamentStatusSync.ensureRaceScheduledForStart(ctx.tournament, ctx.race);
-  if (ctx.tournament.isModified()) {
-    await ctx.tournament.save();
   }
 
   if (tm.toRaceStatusCode(ctx.race.status) !== "SCHEDULED") {
     throw apiError(
       "Chỉ có thể bắt đầu cuộc đua khi cuộc đua ở trạng thái Sắp diễn ra. Admin cần lên lịch giải trước.",
-      409,
+      400,
     );
+  }
+  if (ctx.race.resultFinalizedAt || (ctx.race.results && ctx.race.results.length)) {
+    throw apiError("Cuộc đua đã có kết quả và không thể bắt đầu lại", 400);
   }
   try {
     assertRaceReadyToStart(ctx.tournament, ctx.race);
   } catch (err) {
     throw apiError(err.message || "Cuộc đua chưa sẵn sàng để bắt đầu", err.status || 400);
   }
-  ctx.race.status = "Đang chạy";
+  await raceLifecycleService.lockBetting(ctx.race._id);
+  getApprovedParticipants(ctx.tournament, ctx.race._id).forEach(function (registration) {
+    if (registration.checkInStatus === "CHECKED_IN") {
+      registration.participantStatus = "RACING";
+      registration.status = "Đang chạy";
+      return;
+    }
+    if (registration.participantStatus === "REGISTERED") {
+      registration.checkInStatus = "ABSENT";
+      registration.participantStatus = "ABSENT";
+    }
+  });
+  ctx.race.status = tm.RACE_STATUS_LABELS.ONGOING;
   await ctx.tournament.save();
+  await Promise.allSettled([raceLifecycleService.publishRaceStarted(ctx.tournament, ctx.race)]);
   res.json(apiSuccess(mapRaceSummary({
     tournament: ctx.tournament,
     race: ctx.race,
@@ -180,6 +192,7 @@ async function startRace(req, res) {
 }
 
 async function finalizeResults(req, res) {
+  if (!req.get("Idempotency-Key")) throw apiError("Thiếu Idempotency-Key", 400);
   var ctx = await findRaceContext(req.params.raceId);
   if (!ctx) throw apiError("Không tìm thấy cuộc đua", 404);
   if (!ctx.race.refereeId || String(ctx.race.refereeId) !== String(req.user.id)) {
@@ -188,24 +201,11 @@ async function finalizeResults(req, res) {
   if (ctx.race.simulation && ctx.race.simulation.status && ctx.race.simulation.status !== "NOT_STARTED") {
     throw apiError("Cuộc đua đã có mô phỏng; hãy xác nhận kết quả mô phỏng", 409);
   }
-  if (!refereeService.RACE_STATUS_ONGOING_ALIASES[ctx.race.status]) {
-    if (ctx.tournament.status === "Đang diễn ra") {
-      if (tournamentStatusSync.repairRacesForOngoingTournament(ctx.tournament)) {
-        await ctx.tournament.save();
-      }
-      tournamentStatusSync.ensureRaceScheduledForStart(ctx.tournament, ctx.race);
-      if (tm.toRaceStatusCode(ctx.race.status) === "SCHEDULED") {
-        try {
-          assertRaceReadyToStart(ctx.tournament, ctx.race);
-          ctx.race.status = "Đang chạy";
-        } catch (err) {
-          throw apiError(err.message || "Cuộc đua chưa sẵn sàng để chốt kết quả", err.status || 400);
-        }
-      }
-    }
-    if (!refereeService.RACE_STATUS_ONGOING_ALIASES[ctx.race.status]) {
-      throw apiError("Only ongoing races can be finalized", 409);
-    }
+  if (ctx.race.resultFinalizedAt || (ctx.race.results && ctx.race.results.length)) {
+    throw apiError("Kết quả cuộc đua đã được xác nhận", 409);
+  }
+  if (tm.toRaceStatusCode(ctx.race.status) !== "ONGOING") {
+    throw apiError("Chỉ có thể xác nhận kết quả khi cuộc đua đang diễn ra", 409);
   }
 
   var entries = Array.isArray(req.body.results) ? req.body.results : [];
@@ -249,6 +249,7 @@ async function finalizeResults(req, res) {
       time: finishMs > 0 ? String(finishMs) : "—",
       points: 0,
       notes: item.note || "",
+      status: isDisqualified ? "DISQUALIFIED" : "FINISHED",
       source: "MANUAL",
     });
   });
@@ -262,20 +263,16 @@ async function finalizeResults(req, res) {
   ctx.race.results = savedResults;
   ctx.race.status = "Hoàn thành";
   ctx.race.resultFinalizedAt = new Date();
+  ctx.race.resultFinalizedBy = req.user.id;
 
-  if (
-    ctx.race.refereePaymentStatus === "HELD" &&
-    Number(ctx.race.refereePaymentAmount || 0) > 0
-  ) {
-    await payReferee(ctx.race.refereeId, ctx.race.refereePaymentAmount, {
-      referenceType: "RACE",
-      referenceId: raceId,
-      description: "Thù lao trọng tài - " + (ctx.race.name || ""),
-    });
-    ctx.race.refereePaymentStatus = "PAID";
-  }
+  var settlement = await raceFinancialSettlementService.finalizeRace(ctx, req.user.id);
+  ctx.tournament = settlement.tournament;
+  ctx.race = settlement.race;
 
-  await ctx.tournament.save();
+  await Promise.allSettled([
+    raceLifecycleService.settleBetting(raceId),
+    raceLifecycleService.publishRaceResult(ctx.tournament, ctx.race),
+  ]);
 
   await Promise.allSettled(savedResults.filter(function (row) {
     return row.horseId && row.position > 0;
@@ -312,6 +309,7 @@ async function generateSimulation(req, res) {
 }
 
 async function confirmSimulation(req, res) {
+  if (!req.get("Idempotency-Key")) throw apiError("Thiếu Idempotency-Key", 400);
   var results = await raceSimulationService.confirm(
     req.params.raceId,
     req.user.id,

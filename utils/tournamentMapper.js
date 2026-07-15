@@ -152,6 +152,7 @@ function mapResult(result) {
     time: result.time || "",
     points: result.points || 0,
     notes: result.notes || "",
+    status: result.status || (Number(result.position) > 0 ? "FINISHED" : "DISQUALIFIED"),
   };
 }
 
@@ -187,6 +188,11 @@ function mapRace(race) {
     refereeId: race.refereeId ? String(race.refereeId) : null,
     prizes: mapPrizes(race.prizes),
     results: (race.results || []).map(mapResult),
+    resultFinalizedAt: race.resultFinalizedAt || null,
+    resultFinalizedBy: race.resultFinalizedBy ? String(race.resultFinalizedBy) : null,
+    financialSettlementStatus: race.financialSettlementStatus || "NONE",
+    financialSettledAt: race.financialSettledAt || null,
+    financialSettlementSnapshot: race.financialSettlementSnapshot || null,
   };
 }
 
@@ -209,6 +215,10 @@ function mapRegistration(registration) {
     status: registration.status,
     notes: registration.notes || "",
     registeredAt: registration.registeredAt,
+    entryFeeAmount: Number(registration.entryFeeAmount || 0),
+    depositAmount: Number(registration.depositAmount || 0),
+    paymentStatus: registration.paymentStatus || "UNCHARGED",
+    depositStatus: registration.depositStatus || "NONE",
   };
 }
 

@@ -1,5 +1,24 @@
-var { Wallet, WalletTransaction } = require("../models/wallet");
+var mongoose = require("../db");
+var models = require("../models/wallet");
+var Wallet = models.Wallet;
+var WalletOperation = models.WalletOperation;
+var WalletTransaction = models.WalletTransaction;
+var TreasuryAlert = models.TreasuryAlert;
 var { apiError } = require("../utils/apiResponse");
+
+function asInteger(value, field) {
+  var number = Number(value || 0);
+  if (!Number.isSafeInteger(number)) {
+    throw apiError((field || "Số tiền") + " phải là số nguyên VND", 400);
+  }
+  return number;
+}
+
+function requirePositiveInteger(value, field) {
+  var number = asInteger(value, field);
+  if (number <= 0) throw apiError((field || "Số tiền") + " phải lớn hơn 0", 400);
+  return number;
+}
 
 function mapWallet(wallet) {
   if (!wallet) return null;
@@ -8,6 +27,7 @@ function mapWallet(wallet) {
   return {
     id: String(wallet._id),
     ownerType: wallet.ownerType,
+    accountClass: wallet.accountClass || (wallet.ownerType === "SYSTEM" ? "TREASURY_ASSET" : "USER_LIABILITY"),
     userId: wallet.userId ? String(wallet.userId) : null,
     currency: wallet.currency || "VND",
     availableBalance: available,
@@ -20,16 +40,24 @@ function mapWallet(wallet) {
 }
 
 function mapTransaction(tx) {
-  var amount = Number(tx.amount || 0);
+  var availableDelta = Number(tx.availableDelta != null ? tx.availableDelta : tx.amount || 0);
+  var holdDelta = Number(tx.holdDelta || 0);
+  var legacyAmount = Number(tx.amount || 0);
   return {
     id: String(tx._id),
+    operationId: tx.operationId ? String(tx.operationId) : null,
+    postingIndex: Number(tx.postingIndex || 0),
     walletId: String(tx.walletId),
     userId: tx.userId ? String(tx.userId) : null,
     type: tx.type,
-    direction: amount < 0 ? "DEBIT" : "CREDIT",
-    amount: Math.abs(amount),
+    operationType: tx.operationType || tx.type,
+    direction: availableDelta < 0 || (availableDelta === 0 && holdDelta < 0) ? "DEBIT" : "CREDIT",
+    amount: Math.abs(legacyAmount),
+    availableDelta: availableDelta,
+    holdDelta: holdDelta,
     balanceAfter: Number(tx.balanceAfter || 0),
-    availableAfter: Number(tx.balanceAfter || 0),
+    availableAfter: Number(tx.availableAfter != null ? tx.availableAfter : tx.balanceAfter || 0),
+    holdAfter: Number(tx.holdAfter || 0),
     status: "SUCCESS",
     referenceType: tx.referenceType || "",
     referenceId: tx.referenceId || "",
@@ -39,198 +67,296 @@ function mapTransaction(tx) {
   };
 }
 
-async function getOrCreateWallet(query, defaults) {
-  var wallet = await Wallet.findOne(query).exec();
-  if (wallet) return wallet;
-  wallet = new Wallet(Object.assign({}, defaults, query));
-  await wallet.save();
-  return wallet;
-}
-
-async function getUserWallet(userId) {
-  return getOrCreateWallet({ ownerType: "USER", userId: userId }, {
-    ownerType: "USER",
-    userId: userId,
+function walletDefaults(ownerType, userId) {
+  return {
+    ownerType: ownerType,
+    userId: userId || null,
+    accountClass: ownerType === "SYSTEM" ? "TREASURY_ASSET" : "USER_LIABILITY",
     availableBalance: 0,
     holdBalance: 0,
+    status: "ACTIVE",
+  };
+}
+
+async function getOrCreateWallet(query, defaults, session) {
+  var options = { new: true, upsert: true, setDefaultsOnInsert: true };
+  if (session) options.session = session;
+  return Wallet.findOneAndUpdate(
+    Object.assign({ status: { $in: ["ACTIVE", "FROZEN"] } }, query),
+    { $setOnInsert: Object.assign({}, defaults, query) },
+    options,
+  ).exec();
+}
+
+async function getUserWallet(userId, session) {
+  if (!userId) throw apiError("Thiếu userId của ví", 400);
+  return getOrCreateWallet(
+    { ownerType: "USER", userId: userId },
+    walletDefaults("USER", userId),
+    session,
+  );
+}
+
+async function getSystemWallet(session) {
+  return getOrCreateWallet(
+    { ownerType: "SYSTEM" },
+    walletDefaults("SYSTEM", null),
+    session,
+  );
+}
+
+function validateOperation(payload) {
+  if (!payload || !String(payload.idempotencyKey || "").trim()) {
+    throw apiError("Thiếu Idempotency-Key", 400);
+  }
+  if (!payload.type) throw apiError("Thiếu loại nghiệp vụ ví", 400);
+  if (!Array.isArray(payload.postings) || !payload.postings.length) {
+    throw apiError("Nghiệp vụ ví phải có ít nhất một posting", 400);
+  }
+  payload.postings.forEach(function (posting, index) {
+    var availableDelta = asInteger(posting.availableDelta, "availableDelta posting " + index);
+    var holdDelta = asInteger(posting.holdDelta, "holdDelta posting " + index);
+    if (availableDelta === 0 && holdDelta === 0 && ["OPENING_BALANCE", "LEGACY_IMPORTED"].indexOf(payload.type) === -1) {
+      throw apiError("Posting phải làm thay đổi số dư", 400);
+    }
+    if (!posting.walletId && !posting.ownerType) {
+      throw apiError("Posting thiếu walletId hoặc ownerType", 400);
+    }
+    if (posting.ownerType === "USER" && !posting.userId) {
+      throw apiError("Posting USER thiếu userId", 400);
+    }
   });
 }
 
-async function getSystemWallet() {
-  return getOrCreateWallet({ ownerType: "SYSTEM" }, {
-    ownerType: "SYSTEM",
-    availableBalance: 0,
-    holdBalance: 0,
-  });
+async function resolvePostingWallet(posting, session) {
+  if (posting.walletId) {
+    var wallet = await Wallet.findById(posting.walletId).session(session).exec();
+    if (!wallet) throw apiError("Không tìm thấy ví", 404);
+    return wallet;
+  }
+  if (posting.ownerType === "SYSTEM") return getSystemWallet(session);
+  return getUserWallet(posting.userId, session);
+}
+
+async function applyPosting(operation, payload, posting, index, session) {
+  var wallet = await resolvePostingWallet(posting, session);
+  var availableDelta = asInteger(posting.availableDelta, "availableDelta");
+  var holdDelta = asInteger(posting.holdDelta, "holdDelta");
+  var filter = { _id: wallet._id };
+
+  if (wallet.ownerType === "USER") {
+    if (availableDelta < 0) filter.availableBalance = { $gte: Math.abs(availableDelta) };
+    if (holdDelta < 0) filter.holdBalance = { $gte: Math.abs(holdDelta) };
+  }
+
+  var updated = await Wallet.findOneAndUpdate(
+    filter,
+    { $inc: { availableBalance: availableDelta, holdBalance: holdDelta } },
+    { new: true, session: session },
+  ).exec();
+
+  if (!updated) throw apiError("Số dư available/hold không đủ", 400);
+
+  var legacyAmount = posting.amount;
+  if (legacyAmount == null) legacyAmount = availableDelta !== 0 ? availableDelta : holdDelta;
+  legacyAmount = asInteger(legacyAmount, "amount");
+
+  var docs = await WalletTransaction.create(
+    [
+      {
+        walletId: updated._id,
+        userId: posting.userId || updated.userId,
+        operationId: operation._id,
+        postingIndex: index,
+        type: posting.transactionType || payload.transactionType || "FEE",
+        operationType: payload.type,
+        amount: legacyAmount,
+        balanceAfter: updated.availableBalance,
+        availableDelta: availableDelta,
+        holdDelta: holdDelta,
+        availableAfter: updated.availableBalance,
+        holdAfter: updated.holdBalance,
+        referenceType: payload.referenceType || "",
+        referenceId: payload.referenceId || "",
+        description: posting.description || payload.description || "",
+      },
+    ],
+    { session: session },
+  );
+  if (updated.ownerType === "SYSTEM" && Number(updated.availableBalance) < 0 && availableDelta < 0) {
+    await TreasuryAlert.create([{
+      operationId: operation._id,
+      postingIndex: index,
+      balance: updated.availableBalance,
+      delta: availableDelta,
+      message: "Treasury âm hoặc giảm sâu hơn sau " + payload.type,
+    }], { session: session });
+  }
+  return { wallet: updated, transaction: docs[0] };
+}
+
+async function executeInSession(payload, session) {
+  validateOperation(payload);
+  var key = String(payload.idempotencyKey).trim();
+  var existing = await WalletOperation.findOne({ idempotencyKey: key }).session(session).exec();
+  if (existing && existing.status === "COMPLETED") {
+    var previous = await WalletTransaction.find({ operationId: existing._id })
+      .sort({ postingIndex: 1 })
+      .session(session)
+      .exec();
+    return { operation: existing, postings: previous, idempotent: true };
+  }
+  if (existing) throw apiError("Nghiệp vụ ví đang được xử lý", 409);
+
+  var operations = await WalletOperation.create(
+    [
+      {
+        idempotencyKey: key,
+        type: payload.type,
+        status: "PROCESSING",
+        referenceType: payload.referenceType || "",
+        referenceId: payload.referenceId || "",
+        actorId: payload.actorId || null,
+        metadata: payload.metadata || {},
+      },
+    ],
+    { session: session },
+  );
+  var operation = operations[0];
+  var results = [];
+  for (var i = 0; i < payload.postings.length; i += 1) {
+    results.push(await applyPosting(operation, payload, payload.postings[i], i, session));
+  }
+
+  if (typeof payload.mutateDomain === "function") {
+    await payload.mutateDomain(session, operation, results);
+  }
+
+  operation.status = "COMPLETED";
+  operation.completedAt = new Date();
+  await operation.save({ session: session });
+  return {
+    operation: operation,
+    postings: results.map(function (item) { return item.transaction; }),
+    wallets: results.map(function (item) { return item.wallet; }),
+    idempotent: false,
+  };
+}
+
+async function executeOperation(payload, options) {
+  options = options || {};
+  if (options.session) return executeInSession(payload, options.session);
+  try {
+    return await mongoose.connection.transaction(function (session) {
+      return executeInSession(payload, session);
+    });
+  } catch (err) {
+    if (err && err.code === 11000) {
+      var existing = await WalletOperation.findOne({ idempotencyKey: String(payload.idempotencyKey || "").trim() }).exec();
+      if (existing && existing.status === "COMPLETED") {
+        var previous = await WalletTransaction.find({ operationId: existing._id }).sort({ postingIndex: 1 }).exec();
+        return { operation: existing, postings: previous, idempotent: true };
+      }
+    }
+    throw err;
+  }
 }
 
 async function recordTransaction(wallet, payload) {
-  wallet.availableBalance = Number(wallet.availableBalance || 0) + Number(payload.amount || 0);
-  if (wallet.availableBalance < 0) {
-    throw apiError("Số dư không đủ", 400);
-  }
-  await wallet.save();
-
-  var tx = await WalletTransaction.create({
-    walletId: wallet._id,
-    userId: payload.userId || wallet.userId,
-    type: payload.type,
-    amount: payload.amount,
-    balanceAfter: wallet.availableBalance,
-    referenceType: payload.referenceType || "",
-    referenceId: payload.referenceId || "",
-    description: payload.description || "",
+  var key = payload.idempotencyKey || ["legacy", payload.type, payload.referenceType || "", payload.referenceId || "", wallet._id].join(":");
+  var result = await executeOperation({
+    idempotencyKey: key,
+    type: payload.operationType || payload.type,
+    referenceType: payload.referenceType,
+    referenceId: payload.referenceId,
+    description: payload.description,
+    postings: [{
+      walletId: wallet._id,
+      userId: payload.userId || wallet.userId,
+      transactionType: payload.type,
+      availableDelta: asInteger(payload.amount, "amount"),
+      holdDelta: 0,
+    }],
   });
-
-  return { wallet: wallet, transaction: tx };
+  return { wallet: result.wallets && result.wallets[0], transaction: result.postings[0], operation: result.operation };
 }
 
 async function holdStake(userId, amount, reference) {
-  var wallet = await getUserWallet(userId);
-  if (Number(wallet.availableBalance || 0) < amount) {
-    throw apiError("Số dư ví không đủ để đặt cược", 400);
-  }
-  wallet.availableBalance -= amount;
-  wallet.holdBalance = Number(wallet.holdBalance || 0) + amount;
-  await wallet.save();
-
-  await WalletTransaction.create({
-    walletId: wallet._id,
-    userId: userId,
-    type: "BET_STAKE",
-    amount: -amount,
-    balanceAfter: wallet.availableBalance,
+  amount = requirePositiveInteger(amount, "Tiền cược");
+  var result = await executeOperation({
+    idempotencyKey: reference.idempotencyKey || "bet:place:" + reference.referenceId,
+    type: "BET_PLACE",
     referenceType: reference.referenceType || "BET",
     referenceId: reference.referenceId || "",
-    description: reference.description || "Tiền cược",
+    actorId: userId,
+    postings: [{ ownerType: "USER", userId: userId, transactionType: "BET_STAKE", availableDelta: -amount, holdDelta: amount, description: reference.description || "Giữ tiền cược" }],
+    mutateDomain: reference.mutateDomain,
   });
-
-  return wallet;
+  return result.wallets && result.wallets[0];
 }
 
 async function payReferee(refereeId, amount, reference) {
   amount = Number(amount || 0);
   if (!refereeId || amount <= 0) return null;
-
-  var wallet = await getUserWallet(refereeId);
-  await recordTransaction(wallet, {
-    type: "REFEREE_FEE",
-    amount: amount,
-    userId: refereeId,
+  requirePositiveInteger(amount, "Thù lao trọng tài");
+  return executeOperation({
+    idempotencyKey: reference.idempotencyKey || "race:referee:" + reference.referenceId + ":" + refereeId,
+    type: "REFEREE_PAYOUT",
     referenceType: reference.referenceType || "RACE",
     referenceId: reference.referenceId || "",
-    description: reference.description || "Thù lao trọng tài",
+    postings: [
+      { ownerType: "USER", userId: refereeId, transactionType: "REFEREE_FEE", availableDelta: amount, holdDelta: 0, description: reference.description || "Thù lao trọng tài" },
+      { ownerType: "SYSTEM", transactionType: "REFEREE_FEE", availableDelta: -amount, holdDelta: 0, description: "Chi trả thù lao trọng tài" },
+    ],
   });
-
-  var sysWallet = await getSystemWallet();
-  sysWallet.availableBalance = Number(sysWallet.availableBalance || 0) - amount;
-  await sysWallet.save();
-  await WalletTransaction.create({
-    walletId: sysWallet._id,
-    type: "REFEREE_FEE",
-    amount: -amount,
-    balanceAfter: sysWallet.availableBalance,
-    referenceType: reference.referenceType || "RACE",
-    referenceId: reference.referenceId || "",
-    description: reference.description || "Chi trả thù lao trọng tài",
-  });
-
-  return wallet;
 }
 
 async function settleBetWin(userId, stakeAmount, payoutAmount, reference) {
-  var wallet = await getUserWallet(userId);
-  wallet.holdBalance = Math.max(0, Number(wallet.holdBalance || 0) - stakeAmount);
-  wallet.availableBalance = Number(wallet.availableBalance || 0) + payoutAmount;
-  await wallet.save();
-
-  await WalletTransaction.create({
-    walletId: wallet._id,
-    userId: userId,
-    type: "BET_PAYOUT",
-    amount: payoutAmount,
-    balanceAfter: wallet.availableBalance,
-    referenceType: reference.referenceType || "BET",
-    referenceId: reference.referenceId || "",
-    description: reference.description || "Thắng cược",
-  });
-
+  stakeAmount = requirePositiveInteger(stakeAmount, "Tiền cược");
+  payoutAmount = requirePositiveInteger(payoutAmount, "Tiền trả cược");
   var profit = payoutAmount - stakeAmount;
-  if (profit > 0) {
-    var sysWallet = await getSystemWallet();
-    sysWallet.availableBalance = Number(sysWallet.availableBalance || 0) - profit;
-    await sysWallet.save();
-    await WalletTransaction.create({
-      walletId: sysWallet._id,
-      type: "BET_PAYOUT",
-      amount: -profit,
-      balanceAfter: sysWallet.availableBalance,
-      referenceType: reference.referenceType || "BET",
-      referenceId: reference.referenceId || "",
-      description: "Chi trả tiền thắng cược",
-    });
-  }
-
-  return wallet;
+  var postings = [{ ownerType: "USER", userId: userId, transactionType: "BET_PAYOUT", availableDelta: payoutAmount, holdDelta: -stakeAmount, description: reference.description || "Thắng cược" }];
+  if (profit > 0) postings.push({ ownerType: "SYSTEM", transactionType: "BET_PAYOUT", availableDelta: -profit, holdDelta: 0, description: "Chi trả lợi nhuận cược" });
+  return executeOperation({ idempotencyKey: reference.idempotencyKey || "bet:settle:win:" + reference.referenceId, type: "BET_WIN", referenceType: reference.referenceType || "BET", referenceId: reference.referenceId || "", postings: postings, mutateDomain: reference.mutateDomain });
 }
 
 async function settleBetLoss(userId, stakeAmount, reference) {
-  var wallet = await getUserWallet(userId);
-  wallet.holdBalance = Math.max(0, Number(wallet.holdBalance || 0) - stakeAmount);
-  await wallet.save();
-
-  await WalletTransaction.create({
-    walletId: wallet._id,
-    userId: userId,
-    type: "BET_STAKE",
-    amount: 0,
-    balanceAfter: wallet.availableBalance,
+  stakeAmount = requirePositiveInteger(stakeAmount, "Tiền cược");
+  return executeOperation({
+    idempotencyKey: reference.idempotencyKey || "bet:settle:loss:" + reference.referenceId,
+    type: "BET_LOSS",
     referenceType: reference.referenceType || "BET",
     referenceId: reference.referenceId || "",
-    description: reference.description || "Thua cược",
+    postings: [
+      { ownerType: "USER", userId: userId, transactionType: "BET_STAKE", availableDelta: 0, holdDelta: -stakeAmount, description: reference.description || "Thua cược" },
+      { ownerType: "SYSTEM", transactionType: "BET_STAKE", availableDelta: stakeAmount, holdDelta: 0, description: "Thu tiền cược thua" },
+    ],
+    mutateDomain: reference.mutateDomain,
   });
-
-  var sysWallet = await getSystemWallet();
-  sysWallet.availableBalance = Number(sysWallet.availableBalance || 0) + stakeAmount;
-  await sysWallet.save();
-  await WalletTransaction.create({
-    walletId: sysWallet._id,
-    type: "BET_STAKE",
-    amount: stakeAmount,
-    balanceAfter: sysWallet.availableBalance,
-    referenceType: reference.referenceType || "BET",
-    referenceId: reference.referenceId || "",
-    description: "Thu tiền cược thua",
-  });
-
-  return wallet;
 }
 
 async function refundStake(userId, stakeAmount, reference) {
-  var wallet = await getUserWallet(userId);
-  wallet.holdBalance = Math.max(0, Number(wallet.holdBalance || 0) - stakeAmount);
-  wallet.availableBalance = Number(wallet.availableBalance || 0) + stakeAmount;
-  await wallet.save();
-
-  await WalletTransaction.create({
-    walletId: wallet._id,
-    userId: userId,
+  stakeAmount = requirePositiveInteger(stakeAmount, "Tiền cược");
+  return executeOperation({
+    idempotencyKey: reference.idempotencyKey || "bet:settle:refund:" + reference.referenceId,
     type: "BET_REFUND",
-    amount: stakeAmount,
-    balanceAfter: wallet.availableBalance,
     referenceType: reference.referenceType || "BET",
     referenceId: reference.referenceId || "",
-    description: reference.description || "Hoàn tiền cược",
+    postings: [{ ownerType: "USER", userId: userId, transactionType: "BET_REFUND", availableDelta: stakeAmount, holdDelta: -stakeAmount, description: reference.description || "Hoàn tiền cược" }],
+    mutateDomain: reference.mutateDomain,
   });
-
-  return wallet;
 }
 
 module.exports = {
+  asInteger: asInteger,
+  requirePositiveInteger: requirePositiveInteger,
+  validateOperation: validateOperation,
   mapWallet: mapWallet,
   mapTransaction: mapTransaction,
   getUserWallet: getUserWallet,
   getSystemWallet: getSystemWallet,
+  executeOperation: executeOperation,
+  executeInSession: executeInSession,
   recordTransaction: recordTransaction,
   holdStake: holdStake,
   payReferee: payReferee,

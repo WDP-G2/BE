@@ -6,6 +6,8 @@
     "start": "node ./bin/www",
     "test": "node --test test/*.test.js",
     "backfill:race-stats": "node scripts/backfillRaceStats.js",
+    "wallet-ledger:audit": "node scripts/migrateWalletLedger.js",
+    "wallet-ledger:migrate": "node scripts/migrateWalletLedger.js --apply --confirm-backup",
     "seed": "node ./scripts/seedSampleData.js",
     "setup-hooks": "node scripts/install-git-hooks.js",
     "prepare": "node scripts/install-git-hooks.js"

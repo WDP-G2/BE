@@ -10,6 +10,7 @@ var tm = require("../utils/tournamentMapper");
 var tournamentService = require("../services/tournamentService");
 var tournamentRaceService = require("../services/tournamentRaceService");
 var registrationService = require("../services/registrationService");
+var { BetMarket } = require("../models/betting");
 
 async function list(req, res, next) {
   try {
@@ -218,7 +219,8 @@ async function updateStatus(req, res, next) {
 
     if (currentStatusCode === "ONGOING" && nextStatusCode === "COMPLETED") {
       var pendingRaces = (tournament.races || []).filter(function (race) {
-        return tm.toRaceStatusCode(race.status) !== "RESULT_CONFIRMED";
+        var raceStatusCode = tm.toRaceStatusCode(race.status);
+        return raceStatusCode !== "RESULT_CONFIRMED" && raceStatusCode !== "CANCELLED";
       });
       if (pendingRaces.length > 0) {
         return fail(
@@ -755,6 +757,16 @@ async function deleteRace(req, res, next) {
       return fail(res, 404, "Không tìm thấy cuộc đua");
     }
 
+    if (await BetMarket.exists({ tournamentId: tournament._id })) {
+      return fail(res, 409, "Không thể xóa giải đấu đã có market/cược; hãy hủy các race đúng quy trình");
+    }
+
+    var hasRegistration = (tournament.registrations || []).some(function (reg) { return String(reg.raceId || "") === String(race._id); });
+    var hasMarket = await BetMarket.exists({ raceId: race._id });
+    if (hasRegistration || hasMarket || race.financialSettlementStatus !== "NONE") {
+      return fail(res, 409, "Không thể xóa race đã có nghĩa vụ tài chính; hãy dùng luồng hủy race");
+    }
+
     race.deleteOne();
     await tournament.save();
     res.json(tm.mapTournament(tournament));
@@ -890,7 +902,7 @@ async function createOwnerRegistration(req, res, next) {
       jockeyId: jockey._id,
       jockeyName: jockeyName,
       raceId: race._id,
-      status: req.body.status || "Chờ duyệt",
+      status: "Chờ duyệt",
       notes: req.body.notes || "",
     });
 
@@ -902,6 +914,8 @@ async function createOwnerRegistration(req, res, next) {
 }
 
 async function updateRegistration(req, res, next) {
+  return fail(res, 409, "Trạng thái đăng ký phải được xử lý qua API duyệt/từ chối tài chính");
+  /* legacy route intentionally disabled
   try {
     var tournament = await tournamentService.findTournamentByIdOrSlug(
       req.params.identifier,
@@ -935,9 +949,12 @@ async function updateRegistration(req, res, next) {
   } catch (err) {
     next(err);
   }
+  */
 }
 
 async function recordRaceResults(req, res, next) {
+  return fail(res, 410, "API kết quả cũ đã bị khóa; dùng API finalize của trọng tài hoặc simulation");
+  /* legacy route intentionally disabled
   try {
     var tournament = await tournamentService.findTournamentByIdOrSlug(
       req.params.identifier,
@@ -975,6 +992,7 @@ async function recordRaceResults(req, res, next) {
   } catch (err) {
     next(err);
   }
+  */
 }
 
 async function getResults(req, res, next) {

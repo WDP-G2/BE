@@ -10,6 +10,7 @@ var { mapHorse } = require("../utils/horseMapper");
 var ownerService = require("../services/ownerService");
 var { buildOwnerResultsPayload } = require("../services/ownerResultsService");
 var { mapRaceRegistration } = require("../utils/raceRegistrationMapper");
+var invitationService = require("../services/invitationService");
 
 function buildOwnerProfileResponse(app, user) {
   var profileData = (app && app.profileData) || {};
@@ -213,6 +214,26 @@ async function cancelJockeyInvitation(req, res) {
   res.json(apiSuccess(mapInvitation(row)));
 }
 
+async function createJockeyInvitationWithLedger(req, res) {
+  var payload = Object.assign({}, req.body, {
+    tournamentId: req.body.tournamentId,
+    reward: req.body.remunerationAmount != null ? req.body.remunerationAmount : req.body.reward,
+    _idempotencyKey: req.get("Idempotency-Key"),
+  });
+  if (!payload.tournamentId && payload.raceId) {
+    var tournament = await ownerService.findRaceAcrossTournaments(payload.raceId);
+    if (!tournament) throw apiError("Không tìm thấy cuộc đua", 404);
+    payload.tournamentId = tournament._id;
+  }
+  var result = await invitationService.createInvitation(req.user, payload);
+  res.status(201).json(apiSuccess(mapInvitation(result.invitation)));
+}
+
+async function cancelJockeyInvitationWithLedger(req, res) {
+  var invitation = await invitationService.cancelInvitation(req.user, req.params.id);
+  res.json(apiSuccess(mapInvitation(invitation)));
+}
+
 module.exports = {
   getDashboard: getDashboard,
   getResults: getResults,
@@ -221,7 +242,7 @@ module.exports = {
   listHorses: listHorses,
   listRaceRegistrations: listRaceRegistrations,
   listJockeyInvitations: listJockeyInvitations,
-  createJockeyInvitation: createJockeyInvitation,
+  createJockeyInvitation: createJockeyInvitationWithLedger,
   getJockeyInvitation: getJockeyInvitation,
-  cancelJockeyInvitation: cancelJockeyInvitation,
+  cancelJockeyInvitation: cancelJockeyInvitationWithLedger,
 };

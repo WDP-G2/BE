@@ -6,6 +6,7 @@ var {
   mapTransaction,
 } = require("../services/walletLedger");
 var depositOrderService = require("../services/depositOrderService");
+var withdrawalService = require("../services/withdrawalService");
 
 async function getMyWallet(req, res) {
   var wallet = await getUserWallet(req.user.id);
@@ -51,28 +52,17 @@ async function getMyDepositOrder(req, res) {
 }
 
 async function createWithdrawal(req, res) {
-  var amount = Number(req.body.amount || 0);
-  if (amount <= 0) throw apiError("Số tiền không hợp lệ", 400);
-  var wallet = await getUserWallet(req.user.id);
-  if (Number(wallet.availableBalance || 0) < amount) throw apiError("Số dư không đủ", 400);
-
-  var item = await Withdrawal.create({
-    walletId: wallet._id,
+  var item = await withdrawalService.createUserWithdrawal({
     userId: req.user.id,
-    amount: amount,
-    status: "PENDING",
+    amount: req.body.amount,
+    idempotencyKey: req.get("Idempotency-Key"),
     bankAccount: req.body.bankAccountNumber || req.body.bankAccount || "",
     bankName: req.body.bankName || "",
     accountName: req.body.bankAccountName || req.body.accountName || "",
     note: req.body.reason || "",
   });
-
-  wallet.availableBalance -= amount;
-  wallet.holdBalance = Number(wallet.holdBalance || 0) + amount;
-  await wallet.save();
-
   res.status(201).json(
-    apiSuccess({ id: String(item._id), amount: item.amount, status: item.status }, "Tạo yêu cầu rút tiền thành công"),
+    apiSuccess(withdrawalService.mapWithdrawal(item), "Tạo yêu cầu rút tiền thành công"),
   );
 }
 
@@ -81,7 +71,7 @@ async function listMyWithdrawals(req, res) {
   res.json(
     apiSuccess(
       rows.map(function (w) {
-        return { id: String(w._id), amount: w.amount, status: w.status, createdAt: w.createdAt };
+        return withdrawalService.mapWithdrawal(w);
       }),
     ),
   );

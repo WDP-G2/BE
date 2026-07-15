@@ -2,10 +2,11 @@ var { BetMarket, Bet } = require("../models/betting");
 var User = require("../models/user");
 var { apiSuccess, apiError } = require("../utils/apiResponse");
 var { findRaceContext, prizeAmountForRank } = require("../services/tournamentRaceService");
-var { holdStake } = require("../services/walletLedger");
+var { executeOperation, requirePositiveInteger } = require("../services/walletLedger");
 var { mapMarket, mapBet } = require("../utils/bettingMapper");
 var systemSettingsService = require("../services/systemSettingsService");
 var raceSimulationService = require("../services/raceSimulationService");
+var featureFlags = require("../services/financialFeatureFlags");
 
 async function getPublicMarket(req, res) {
   var market = await BetMarket.findOne({ raceId: req.params.raceId, status: "OPEN" }).exec();
@@ -59,6 +60,7 @@ async function getMyBets(req, res) {
 }
 
 async function placeBet(req, res) {
+  featureFlags.assertEnabled("BETTING");
   var settings = await systemSettingsService.getSettingsDoc();
   if (settings.bettingEnabled === false) {
     throw apiError("Tính năng đặt cược hiện đang tắt", 403);
@@ -68,7 +70,9 @@ async function placeBet(req, res) {
   if (!market) throw apiError("Market cược chưa mở", 400);
 
   var participantId = String(req.body.participantId || "");
-  var stakeAmount = Number(req.body.stakeAmount || 0);
+  var stakeAmount = requirePositiveInteger(req.body.stakeAmount, "Tiền cược");
+  var idempotencyKey = String(req.get("Idempotency-Key") || "").trim();
+  if (!idempotencyKey) throw apiError("Thiếu Idempotency-Key", 400);
   if (!participantId || stakeAmount <= 0) throw apiError("Dữ liệu cược không hợp lệ", 400);
   if (stakeAmount < market.minStake || stakeAmount > market.maxStake) {
     throw apiError("Số tiền cược nằm ngoài giới hạn", 400);
@@ -79,28 +83,37 @@ async function placeBet(req, res) {
   });
   if (!option) throw apiError("Ngựa cược không hợp lệ", 400);
 
-  await holdStake(req.user.id, stakeAmount, {
-    referenceType: "BET",
-    referenceId: String(market._id),
-    description: "Đặt cược " + (option.horseName || ""),
-  });
-
   var user = await User.findById(req.user.id).exec();
-  var bet = await Bet.create({
-    marketId: market._id,
-    raceId: market.raceId,
-    raceName: market.raceName || "",
-    tournamentId: market.tournamentId || null,
-    tournamentName: market.tournamentName || "",
-    userId: req.user.id,
-    username: user?.username || user?.fullName || "",
-    participantId: participantId,
-    horseId: option.horseId,
-    horseName: option.horseName,
-    stakeAmount: stakeAmount,
-    potentialPayoutAmount: stakeAmount * 2,
-    status: "PLACED",
+  var result = await executeOperation({
+    idempotencyKey: "bet:place:" + req.user.id + ":" + idempotencyKey,
+    type: "BET_PLACE",
+    referenceType: "BET_MARKET",
+    referenceId: String(market._id),
+    actorId: req.user.id,
+    postings: [{ ownerType: "USER", userId: req.user.id, transactionType: "BET_STAKE", availableDelta: -stakeAmount, holdDelta: stakeAmount, description: "Giữ tiền cược " + (option.horseName || "") }],
+    mutateDomain: async function (session, operation) {
+      var stillOpen = await BetMarket.exists({ _id: market._id, status: "OPEN" }).session(session);
+      if (!stillOpen) throw apiError("Market cược đã đóng", 409);
+      await Bet.create([{
+        marketId: market._id,
+        raceId: market.raceId,
+        raceName: market.raceName || "",
+        tournamentId: market.tournamentId || null,
+        tournamentName: market.tournamentName || "",
+        userId: req.user.id,
+        username: user?.username || user?.fullName || "",
+        participantId: participantId,
+        horseId: option.horseId,
+        horseName: option.horseName,
+        stakeAmount: stakeAmount,
+        potentialPayoutAmount: stakeAmount * 2,
+        status: "PLACED",
+        idempotencyKey: idempotencyKey,
+        placementOperationId: operation._id,
+      }], { session: session });
+    },
   });
+  var bet = await Bet.findOne({ placementOperationId: result.operation._id }).exec();
 
   res.status(201).json(apiSuccess(mapBet(bet), "Đặt cược thành công"));
 }

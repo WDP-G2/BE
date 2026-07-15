@@ -22,7 +22,7 @@ var BetMarketSchema = new Schema(
     tournamentName: { type: String, default: "" },
     status: {
       type: String,
-      enum: ["DRAFT", "OPEN", "CLOSED", "SETTLED"],
+      enum: ["DRAFT", "OPEN", "CLOSED", "SETTLING", "SETTLED", "CANCELLED"],
       default: "DRAFT",
       index: true,
     },
@@ -33,6 +33,7 @@ var BetMarketSchema = new Schema(
     openedAt: { type: Date },
     closedAt: { type: Date },
     settledAt: { type: Date },
+    settlementStartedAt: { type: Date },
     createdBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
   { timestamps: true },
@@ -63,8 +64,16 @@ var BetSchema = new Schema(
     placedAt: { type: Date, default: Date.now },
     lockedAt: { type: Date },
     settledAt: { type: Date },
+    placementOperationId: { type: Schema.Types.ObjectId, ref: "WalletOperation", default: null },
+    settlementOperationId: { type: Schema.Types.ObjectId, ref: "WalletOperation", default: null },
+    idempotencyKey: { type: String, default: "", index: true },
   },
   { timestamps: true },
+);
+
+BetSchema.index(
+  { userId: 1, idempotencyKey: 1 },
+  { unique: true, partialFilterExpression: { idempotencyKey: { $type: "string", $gt: "" } } },
 );
 
 module.exports = {

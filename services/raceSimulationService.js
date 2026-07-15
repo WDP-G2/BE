@@ -7,7 +7,7 @@ var tm = require("../utils/tournamentMapper");
 var { findRaceContext, getApprovedParticipants, prizeAmountForRank } = require("./tournamentRaceService");
 var { getPerformanceMaps, emptyStats } = require("./racePerformanceService");
 var { runSimulation } = require("./raceSimulationEngine");
-var { payReferee } = require("./walletLedger");
+var raceFinancialSettlementService = require("./raceFinancialSettlementService");
 
 var PLAYBACK_DURATION_MS = 28000;
 
@@ -173,7 +173,7 @@ async function confirm(raceId, refereeId, runId) {
   if (!ctx) throw apiError("Không tìm thấy cuộc đua", 404);
   assertOwnRace(ctx, refereeId);
   var simulation = ctx.race.simulation;
-  if (!simulation || simulation.status !== "GENERATED") {
+  if (!simulation || ["GENERATED", "CONFIRMING"].indexOf(simulation.status) === -1) {
     throw apiError("Cuộc đua chưa có mô phỏng để xác nhận", 409);
   }
   if (!runId || String(simulation.runId) !== String(runId)) {
@@ -186,7 +186,7 @@ async function confirm(raceId, refereeId, runId) {
     throw apiError("Cuộc đua không còn ở trạng thái đang diễn ra", 409);
   }
 
-  var claim = await Tournament.updateOne(
+  var claim = simulation.status === "CONFIRMING" ? { modifiedCount: 1 } : await Tournament.updateOne(
     {
       _id: ctx.tournament._id,
       races: {
@@ -229,6 +229,7 @@ async function confirm(raceId, refereeId, runId) {
       time: String(item.finishTimeMillis),
       points: 0,
       notes: "",
+      status: "FINISHED",
       source: "SIMULATION",
       simulationRunId: simulation.runId,
     };
@@ -237,23 +238,20 @@ async function confirm(raceId, refereeId, runId) {
   ctx.race.results = savedResults;
   ctx.race.status = "Hoàn thành";
   ctx.race.resultFinalizedAt = new Date();
+  ctx.race.resultFinalizedBy = refereeId;
   simulation.status = "CONFIRMED";
   simulation.confirmedAt = new Date();
   simulation.confirmedBy = refereeId;
 
-  var shouldPayReferee =
-    ctx.race.refereePaymentStatus === "HELD" && Number(ctx.race.refereePaymentAmount || 0) > 0;
-  await ctx.tournament.save();
+  var settlement = await raceFinancialSettlementService.finalizeRace(ctx, refereeId);
+  ctx.tournament = settlement.tournament;
+  ctx.race = settlement.race;
 
-  if (shouldPayReferee) {
-    await payReferee(ctx.race.refereeId, ctx.race.refereePaymentAmount, {
-      referenceType: "RACE",
-      referenceId: String(ctx.race._id),
-      description: "Thù lao trọng tài - " + (ctx.race.name || ""),
-    });
-    ctx.race.refereePaymentStatus = "PAID";
-    await ctx.tournament.save();
-  }
+  var raceLifecycleService = require("./raceLifecycleService");
+  await Promise.allSettled([
+    raceLifecycleService.settleBetting(raceId),
+    raceLifecycleService.publishRaceResult(ctx.tournament, ctx.race),
+  ]);
 
   await Promise.allSettled(savedResults.map(function (row) {
     return Horse.findByIdAndUpdate(row.horseId, {
