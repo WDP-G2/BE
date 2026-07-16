@@ -5,6 +5,16 @@ var { apiError } = require("../utils/apiResponse");
 
 var JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 var JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
+var REGISTERABLE_ROLES = ["OWNER", "JOCKEY", "REFEREE", "SPECTATOR", "USER"];
+
+function normalizeRegisterRole(role) {
+  var normalized = String(role || "USER")
+    .replace(/^ROLE_/, "")
+    .trim()
+    .toUpperCase();
+  if (normalized === "HORSE_OWNER") normalized = "OWNER";
+  return REGISTERABLE_ROLES.indexOf(normalized) !== -1 ? normalized : "USER";
+}
 
 function signToken(user) {
   return jwt.sign(
@@ -28,6 +38,7 @@ async function registerUser(payload) {
   var email = (payload.email || "").trim().toLowerCase();
   var password = payload.password || "";
   var phone = (payload.phone || "").trim();
+  var role = normalizeRegisterRole(payload.role);
 
   if (!email || !password) {
     throw apiError("Vui lòng nhập email và mật khẩu", 400);
@@ -48,7 +59,7 @@ async function registerUser(payload) {
     email: email,
     password: bcrypt.hashSync(password, 8),
     phone: phone || undefined,
-    role: "USER",
+    role: role,
   });
   await user.save();
 
