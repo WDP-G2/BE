@@ -19,6 +19,101 @@ function findRaceInTournament(tournament, raceId) {
   });
 }
 
+function schedulesOverlap(firstStart, firstEnd, secondStart, secondEnd) {
+  if (!firstStart || !firstEnd || !secondStart || !secondEnd) return false;
+  return firstStart.getTime() < secondEnd.getTime() && secondStart.getTime() < firstEnd.getTime();
+}
+
+async function loadRaceSchedule(invitation, tournamentCache) {
+  if (!invitation.raceId || !invitation.tournamentId) return null;
+
+  var cacheKey = String(invitation.tournamentId);
+  var tournament = tournamentCache.has(cacheKey)
+    ? tournamentCache.get(cacheKey)
+    : await Tournament.findById(invitation.tournamentId).exec();
+  tournamentCache.set(cacheKey, tournament);
+  if (!tournament) return null;
+
+  var race = findRaceInTournament(tournament, invitation.raceId);
+  if (!race || !race.scheduledAt || !race.scheduledEndAt) return null;
+
+  return { start: new Date(race.scheduledAt), end: new Date(race.scheduledEndAt) };
+}
+
+/**
+ * A jockey can only run one race at a time. When they accept an invitation,
+ * any other pending invitation for the same race (or an overlapping time
+ * slot in another race) can never be honored, so it is auto-cancelled and
+ * its held reward refunded to the inviting owner.
+ */
+async function cancelConflictingInvitations(acceptedInvitation) {
+  var candidates = await JockeyInvitation.find({
+    _id: { $ne: acceptedInvitation._id },
+    jockeyId: acceptedInvitation.jockeyId,
+    status: "Chờ xử lý",
+  }).exec();
+  if (!candidates.length) return;
+
+  var tournamentCache = new Map();
+  var acceptedSchedule = await loadRaceSchedule(acceptedInvitation, tournamentCache);
+
+  for (var i = 0; i < candidates.length; i += 1) {
+    var candidate = candidates[i];
+    var sameRace =
+      acceptedInvitation.raceId &&
+      candidate.raceId &&
+      String(candidate.raceId) === String(acceptedInvitation.raceId);
+
+    var overlapping = false;
+    if (!sameRace && acceptedSchedule) {
+      var candidateSchedule = await loadRaceSchedule(candidate, tournamentCache);
+      overlapping = candidateSchedule
+        ? schedulesOverlap(
+            acceptedSchedule.start,
+            acceptedSchedule.end,
+            candidateSchedule.start,
+            candidateSchedule.end,
+          )
+        : false;
+    }
+    if (!sameRace && !overlapping) continue;
+
+    var note =
+      "Tự động hủy: jockey đã nhận lời mời khác cho " +
+      (sameRace ? "cùng cuộc đua" : "khung giờ trùng lịch") +
+      ".";
+
+    try {
+      if (candidate.rewardStatus === "HELD" && Number(candidate.reward || 0) > 0) {
+        await executeOperation({
+          idempotencyKey: "jockey:invite:auto-cancel:" + candidate._id,
+          type: "JOCKEY_REWARD_REFUND",
+          referenceType: "JOCKEY_INVITATION",
+          referenceId: String(candidate._id),
+          actorId: acceptedInvitation.jockeyId,
+          postings: [{ ownerType: "USER", userId: candidate.ownerId, transactionType: "JOCKEY_REWARD", availableDelta: candidate.reward, holdDelta: -candidate.reward, description: "Hoàn thù lao do jockey nhận lời mời khác trùng lịch" }],
+          mutateDomain: async function (session, operation) {
+            var updated = await JockeyInvitation.findOneAndUpdate(
+              { _id: candidate._id, status: "Chờ xử lý", rewardStatus: "HELD" },
+              { $set: { status: "Đã hủy", cancelledAt: new Date(), rewardStatus: "REFUNDED", rewardSettlementOperationId: operation._id, responseNote: note } },
+              { new: true, session: session },
+            ).exec();
+            if (!updated) throw apiError("Lời mời đã được xử lý", 409);
+          },
+        });
+      } else {
+        await JockeyInvitation.findOneAndUpdate(
+          { _id: candidate._id, status: "Chờ xử lý" },
+          { $set: { status: "Đã hủy", cancelledAt: new Date(), responseNote: note } },
+        ).exec();
+      }
+    } catch (err) {
+      // Best-effort: another request may have already resolved this invitation
+      // (e.g. the owner cancelled it concurrently) — skip and continue.
+    }
+  }
+}
+
 async function createInvitation(actingUser, payload) {
   var jockeyId = payload.jockeyId || "";
   var horseId = payload.horseId || "";
@@ -198,6 +293,14 @@ async function respondToInvitation(actingUser, invitationId, action) {
       { $set: { status: "Đã chấp nhận", respondedAt: new Date() } },
       { new: true },
     ).exec();
+    if (invitation) {
+      try {
+        await cancelConflictingInvitations(invitation);
+      } catch (err) {
+        // The jockey's acceptance already succeeded; a failure here must not
+        // turn that success into an error response.
+      }
+    }
   } else if (action === "reject") {
     if (invitation.rewardStatus === "HELD" && Number(invitation.reward || 0) > 0) {
       var result = await executeOperation({
