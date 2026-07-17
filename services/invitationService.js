@@ -41,6 +41,44 @@ async function loadRaceSchedule(invitation, tournamentCache) {
 }
 
 /**
+ * Blocks sending a new invitation to a jockey who has already accepted
+ * another invitation (from any owner) for the same race, or for a race
+ * whose real schedule overlaps it — the jockey cannot honor a second one.
+ */
+async function findAcceptedScheduleConflict(jockeyId, race, tournamentCache) {
+  if (!race) return null;
+
+  var targetSchedule =
+    race.scheduledAt && race.scheduledEndAt
+      ? { start: new Date(race.scheduledAt), end: new Date(race.scheduledEndAt) }
+      : null;
+
+  var accepted = await JockeyInvitation.find({
+    jockeyId: jockeyId,
+    status: "Đã chấp nhận",
+  }).exec();
+
+  for (var i = 0; i < accepted.length; i += 1) {
+    var candidate = accepted[i];
+    if (candidate.raceId && String(candidate.raceId) === String(race._id)) {
+      return { invitation: candidate, sameRace: true };
+    }
+
+    if (targetSchedule) {
+      var candidateSchedule = await loadRaceSchedule(candidate, tournamentCache);
+      if (
+        candidateSchedule &&
+        schedulesOverlap(targetSchedule.start, targetSchedule.end, candidateSchedule.start, candidateSchedule.end)
+      ) {
+        return { invitation: candidate, sameRace: false };
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
  * A jockey can only run one race at a time. When they accept an invitation,
  * any other pending invitation for the same race (or an overlapping time
  * slot in another race) can never be honored, so it is auto-cancelled and
@@ -156,6 +194,16 @@ async function createInvitation(actingUser, payload) {
   var race = findRaceInTournament(tournament, raceId);
   if (raceId && !race) {
     throw apiError("Race not found", 404);
+  }
+
+  var acceptedConflict = await findAcceptedScheduleConflict(jockey._id, race, new Map());
+  if (acceptedConflict) {
+    throw apiError(
+      acceptedConflict.sameRace
+        ? "Jockey đã nhận lời mời khác cho chính cuộc đua này, không thể gửi thêm lời mời"
+        : "Jockey đã nhận lời mời khác có khung giờ trùng với cuộc đua này, không thể gửi thêm lời mời",
+      409,
+    );
   }
 
   var existingRegistration = (tournament.registrations || []).find(
