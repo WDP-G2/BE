@@ -152,6 +152,28 @@ async function cancelConflictingInvitations(acceptedInvitation) {
   }
 }
 
+/**
+ * Races a jockey can no longer be invited to because they already accepted
+ * an invitation for that exact race (from any owner). Used by the invite
+ * form to lock those races out before the owner even tries to submit.
+ */
+async function listAcceptedRaceLocks(jockeyId) {
+  var accepted = await JockeyInvitation.find({
+    jockeyId: jockeyId,
+    status: "Đã chấp nhận",
+    raceId: { $ne: null },
+  }).exec();
+
+  return accepted.map(function (invitation) {
+    return {
+      raceId: String(invitation.raceId),
+      tournamentId: invitation.tournamentId ? String(invitation.tournamentId) : null,
+      raceLabel: invitation.raceLabel || "",
+      tournamentName: invitation.tournamentName || "",
+    };
+  });
+}
+
 async function createInvitation(actingUser, payload) {
   var jockeyId = payload.jockeyId || "";
   var horseId = payload.horseId || "";
@@ -418,4 +440,5 @@ module.exports = {
   listForOwner: listForOwner,
   respondToInvitation: respondToInvitation,
   cancelInvitation: cancelInvitation,
+  listAcceptedRaceLocks: listAcceptedRaceLocks,
 };

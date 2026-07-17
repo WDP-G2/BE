@@ -127,6 +127,11 @@ async function listJockeyInvitations(req, res) {
   res.json(apiSuccess(rows.map(mapInvitation)));
 }
 
+async function listJockeyAcceptedRaces(req, res) {
+  var locks = await invitationService.listAcceptedRaceLocks(req.params.jockeyId);
+  res.json(apiSuccess(locks));
+}
+
 async function createJockeyInvitation(req, res) {
   var horseId = req.body.horseId || "";
   var raceId = req.body.raceId || "";
@@ -242,6 +247,7 @@ module.exports = {
   listHorses: listHorses,
   listRaceRegistrations: listRaceRegistrations,
   listJockeyInvitations: listJockeyInvitations,
+  listJockeyAcceptedRaces: listJockeyAcceptedRaces,
   createJockeyInvitation: createJockeyInvitationWithLedger,
   getJockeyInvitation: getJockeyInvitation,
   cancelJockeyInvitation: cancelJockeyInvitationWithLedger,

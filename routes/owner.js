@@ -23,6 +23,7 @@ router.put(
   asyncHandler(raceRegistrationsController.withdrawRegistration),
 );
 router.get("/jockey-invitations", asyncHandler(ownerController.listJockeyInvitations));
+router.get("/jockeys/:jockeyId/accepted-races", asyncHandler(ownerController.listJockeyAcceptedRaces));
 router.post("/jockey-invitations", asyncHandler(ownerController.createJockeyInvitation));
 router.get("/jockey-invitations/:id", asyncHandler(ownerController.getJockeyInvitation));
 router.put("/jockey-invitations/:id/cancel", asyncHandler(ownerController.cancelJockeyInvitation));
