@@ -247,9 +247,14 @@ async function executeOperation(payload, options) {
   options = options || {};
   if (options.session) return executeInSession(payload, options.session);
   try {
-    return await mongoose.connection.transaction(function (session) {
-      return executeInSession(payload, session);
+    // `session.withTransaction()` resolves with the raw commit ack, not the
+    // callback's return value, so the result must be captured via closure.
+    var captured;
+    await mongoose.connection.transaction(async function (session) {
+      captured = await executeInSession(payload, session);
+      return captured;
     });
+    return captured;
   } catch (err) {
     if (err && err.code === 11000) {
       var existing = await WalletOperation.findOne({ idempotencyKey: String(payload.idempotencyKey || "").trim() }).exec();
