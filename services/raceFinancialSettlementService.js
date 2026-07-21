@@ -142,6 +142,7 @@ async function finalizeRace(ctx, actorId) {
   }
 
   var operation = null;
+  var wasIdempotent = false;
   if (postings.length) {
     var result = await executeOperation({
       idempotencyKey: "race:financial-settlement:" + raceId,
@@ -154,13 +155,20 @@ async function finalizeRace(ctx, actorId) {
       mutateDomain: applyDomain,
     });
     operation = result.operation;
+    wasIdempotent = Boolean(result.idempotent);
   } else {
     // No money moves, but result locking still uses a conditional update.
     await applyDomain(null, { _id: null });
   }
 
   var tournament = await Tournament.findById(ctx.tournament._id).exec();
-  return { tournament: tournament, race: tournament.races.id(race._id), operation: operation, snapshot: snapshot };
+  return {
+    tournament: tournament,
+    race: tournament.races.id(race._id),
+    operation: operation,
+    snapshot: snapshot,
+    idempotent: wasIdempotent,
+  };
 }
 
 module.exports = { finalizeRace: finalizeRace, prizeShareForRank: prizeShareForRank };

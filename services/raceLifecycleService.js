@@ -17,27 +17,43 @@ function notificationUserIds(tournament, raceId) {
   return Array.from(ids);
 }
 
-async function lockBetting(raceId) {
-  var markets = await BetMarket.find({ raceId: raceId, status: "OPEN" }).select("_id").exec();
+async function lockBetting(raceId, options) {
+  options = options || {};
+  var query = BetMarket.find({ raceId: raceId, status: "OPEN" }).select("_id");
+  if (options.session) query = query.session(options.session);
+  var markets = await query.exec();
   if (!markets.length) return;
   var ids = markets.map(function (market) { return market._id; });
   var now = new Date();
   await BetMarket.updateMany(
     { _id: { $in: ids }, status: "OPEN" },
     { $set: { status: "CLOSED", closedAt: now } },
+    options.session ? { session: options.session } : {},
   ).exec();
   await Bet.updateMany(
     { marketId: { $in: ids }, status: "PLACED" },
     { $set: { status: "LOCKED", lockedAt: now } },
+    options.session ? { session: options.session } : {},
   ).exec();
 }
 
 async function settleBetting(raceId) {
   await lockBetting(raceId);
-  var markets = await BetMarket.find({ raceId: raceId, status: "CLOSED" }).select("_id").exec();
+  var markets = await BetMarket.find({
+    raceId: raceId,
+    status: { $in: ["CLOSED", "SETTLING"] },
+  }).select("_id").exec();
   for (var index = 0; index < markets.length; index += 1) {
     await settleMarket(markets[index]._id);
   }
+}
+
+async function hasPendingBettingSettlement(raceId) {
+  var count = await BetMarket.countDocuments({
+    raceId: raceId,
+    status: { $in: ["OPEN", "CLOSED", "SETTLING"] },
+  });
+  return count > 0;
 }
 
 async function publishNotification(tournament, race, type, title, message) {
@@ -69,6 +85,7 @@ async function publishRaceResult(tournament, race) {
 module.exports = {
   lockBetting: lockBetting,
   settleBetting: settleBetting,
+  hasPendingBettingSettlement: hasPendingBettingSettlement,
   publishRaceStarted: publishRaceStarted,
   publishRaceResult: publishRaceResult,
 };

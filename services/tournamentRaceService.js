@@ -4,6 +4,7 @@ var Province = require("../models/province");
 var User = require("../models/user");
 var RefereeSalaryConfig = require("../models/refereeSalaryConfig");
 var tm = require("../utils/tournamentMapper");
+var raceLifecyclePolicy = require("./raceLifecyclePolicy");
 var { toRaceStatusLabel, buildPrizesFromBody } = require("../utils/tournamentMapper");
 var { toDate, toNumber } = require("./tournamentService");
 
@@ -14,7 +15,10 @@ function isObjectId(value) {
 async function findRaceContext(raceId, options) {
   if (!isObjectId(raceId)) return null;
 
-  var tournament = await Tournament.findOne({ "races._id": raceId }).exec();
+  options = options || {};
+  var query = Tournament.findOne({ "races._id": raceId });
+  if (options.session) query = query.session(options.session);
+  var tournament = await query.exec();
   if (!tournament) return null;
 
   var race = tournament.races.id(String(raceId));
@@ -193,42 +197,6 @@ async function applyRefereeAssignment(race, refereeId, salaryConfigId) {
   race.refereePaymentAmount = amount;
 }
 
-function assertRaceReadyToStart(tournament, race) {
-  var participants = getApprovedParticipants(tournament, race._id);
-  if (!participants.length) {
-    var emptyErr = new Error("Race has no approved participants");
-    emptyErr.status = 400;
-    throw emptyErr;
-  }
-
-  var gates = {};
-  for (var i = 0; i < participants.length; i += 1) {
-    var gate = Number(participants[i].gateNumber);
-    if (!gate || gate <= 0) {
-      var gateErr = new Error("Gate number must be assigned before race starts");
-      gateErr.status = 400;
-      throw gateErr;
-    }
-    if (gates[gate]) {
-      var dupErr = new Error("Gate number already exists in this race");
-      dupErr.status = 400;
-      throw dupErr;
-    }
-    gates[gate] = true;
-  }
-
-  var checkedInCount = participants.filter(function (reg) {
-    return reg.checkInStatus === "CHECKED_IN";
-  }).length;
-  var configuredMin = Number(race.minHorses || 0);
-  var minRequired = configuredMin > 0 ? configuredMin : 1;
-  if (checkedInCount < minRequired) {
-    var minErr = new Error("Race does not have enough checked-in participants");
-    minErr.status = 400;
-    throw minErr;
-  }
-}
-
 function getRaceDefaults(tournament) {
   var config = tournament.config || {};
   return {
@@ -371,7 +339,11 @@ module.exports = {
   sumRacePrizePayouts: sumRacePrizePayouts,
   backfillResultFinalizedAt: backfillResultFinalizedAt,
   getApprovedParticipants: getApprovedParticipants,
-  assertRaceReadyToStart: assertRaceReadyToStart,
+  assertRaceReadyToStart: raceLifecyclePolicy.assertRaceReadyToStart,
+  assertRaceCanStart: raceLifecyclePolicy.assertRaceCanStart,
+  applyRaceStartedState: raceLifecyclePolicy.applyRaceStartedState,
+  prepareOfficialRaceResults: raceLifecyclePolicy.prepareOfficialRaceResults,
+  applyOfficialResultParticipantUpdates: raceLifecyclePolicy.applyOfficialResultParticipantUpdates,
   mapParticipant: mapParticipant,
   applyRefereeAssignment: applyRefereeAssignment,
   getRaceDefaults: getRaceDefaults,
