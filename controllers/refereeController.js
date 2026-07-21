@@ -1,6 +1,7 @@
 var RefereeInvitation = require("../models/refereeInvitation");
 var Violation = require("../models/violation");
 var Horse = require("../models/horse");
+var mongoose = require("../db");
 var { apiSuccess, apiError } = require("../utils/apiResponse");
 var {
   findRaceContext,
@@ -8,7 +9,10 @@ var {
   getApprovedParticipants,
   mapParticipant,
   applyRefereeAssignment,
-  assertRaceReadyToStart,
+  assertRaceCanStart,
+  applyRaceStartedState,
+  prepareOfficialRaceResults,
+  applyOfficialResultParticipantUpdates,
   prizeAmountForRank,
   backfillResultFinalizedAt,
 } = require("../services/tournamentRaceService");
@@ -30,11 +34,17 @@ async function getDashboard(req, res) {
   await tournamentStatusSync.repairRaceStatusesForRows(rows);
   var now = Date.now();
   var summaries = rows.map(mapRaceSummary);
-  var upcomingSummaries = summaries.filter(function (summary) {
-    return (
-      summary.scheduledStartAt &&
-      new Date(summary.scheduledStartAt).getTime() >= now
-    );
+  var activeSummaries = summaries.filter(function (summary) {
+    return summary.statusCode === "SCHEDULED" || summary.statusCode === "ONGOING";
+  }).sort(function (first, second) {
+    if (first.statusCode !== second.statusCode) {
+      return first.statusCode === "ONGOING" ? -1 : 1;
+    }
+    return new Date(first.scheduledStartAt || 0).getTime() -
+      new Date(second.scheduledStartAt || 0).getTime();
+  });
+  var upcomingSummaries = activeSummaries.filter(function (summary) {
+    return summary.statusCode === "SCHEDULED";
   });
 
   var checkedInCount = summaries.reduce(function (sum, summary) {
@@ -49,12 +59,12 @@ async function getDashboard(req, res) {
     assignedRaceCount: rows.length,
     pendingCheckInCount: pendingCheckInCount,
     checkedInCount: checkedInCount,
-    upcomingRaces: summaries.slice(0, 5),
+    upcomingRaces: activeSummaries.slice(0, 5),
     businessSummary: {
       upcomingRaceCount: upcomingSummaries.length,
     },
     alerts: refereeService.buildDashboardAlerts(summaries, now).slice(0, 10),
-    upcoming: upcomingSummaries.slice(0, 5).map(function (summary) {
+    upcoming: activeSummaries.slice(0, 5).map(function (summary) {
       return {
         id: summary.id,
         title: summary.name,
@@ -142,53 +152,57 @@ async function checkInParticipant(req, res) {
 }
 
 async function startRace(req, res) {
-  var ctx = await findRaceContext(req.params.raceId);
-  if (!ctx) throw apiError("Không tìm thấy cuộc đua", 404);
-  if (!ctx.race.refereeId || String(ctx.race.refereeId) !== String(req.user.id)) {
-    throw apiError("Bạn không được phân công cuộc đua này", 403);
-  }
-  if (tm.toTournamentStatusCode(ctx.tournament.status) !== "ONGOING") {
-    throw apiError(
-      "Giải đấu chưa được bắt đầu. Vui lòng chờ ban tổ chức chuyển giải sang trạng thái Đang diễn ra.",
-      400,
-    );
-  }
+  var committedContext = null;
+  await mongoose.connection.transaction(async function (session) {
+    var transactionContext = await findRaceContext(req.params.raceId, { session: session });
+    if (!transactionContext) throw apiError("Không tìm thấy cuộc đua", 404);
 
-  if (tm.toRaceStatusCode(ctx.race.status) !== "SCHEDULED") {
-    throw apiError(
-      "Chỉ có thể bắt đầu cuộc đua khi cuộc đua ở trạng thái Sắp diễn ra. Admin cần lên lịch giải trước.",
-      400,
-    );
-  }
-  if (ctx.race.resultFinalizedAt || (ctx.race.results && ctx.race.results.length)) {
-    throw apiError("Cuộc đua đã có kết quả và không thể bắt đầu lại", 400);
-  }
-  try {
-    assertRaceReadyToStart(ctx.tournament, ctx.race);
-  } catch (err) {
-    throw apiError(err.message || "Cuộc đua chưa sẵn sàng để bắt đầu", err.status || 400);
-  }
-  await raceLifecycleService.lockBetting(ctx.race._id);
-  getApprovedParticipants(ctx.tournament, ctx.race._id).forEach(function (registration) {
-    if (registration.checkInStatus === "CHECKED_IN") {
-      registration.participantStatus = "RACING";
-      registration.status = "Đang chạy";
-      return;
-    }
-    if (registration.participantStatus === "REGISTERED") {
-      registration.checkInStatus = "ABSENT";
-      registration.participantStatus = "ABSENT";
-    }
+    assertRaceCanStart(transactionContext.tournament, transactionContext.race, req.user.id);
+    await raceLifecycleService.lockBetting(transactionContext.race._id, { session: session });
+    applyRaceStartedState(transactionContext.tournament, transactionContext.race);
+    await transactionContext.tournament.save({ session: session });
+    committedContext = transactionContext;
   });
-  ctx.race.status = tm.RACE_STATUS_LABELS.ONGOING;
-  await ctx.tournament.save();
-  await Promise.allSettled([raceLifecycleService.publishRaceStarted(ctx.tournament, ctx.race)]);
+
+  var ctx = await findRaceContext(req.params.raceId);
+  if (!ctx) ctx = committedContext;
+  await Promise.allSettled([
+    raceLifecycleService.publishRaceStarted(ctx.tournament, ctx.race),
+  ]);
   res.json(apiSuccess(mapRaceSummary({
     tournament: ctx.tournament,
     race: ctx.race,
     tournamentId: String(ctx.tournament._id),
     tournamentName: ctx.tournament.name,
+    tournamentStatus: ctx.tournament.status,
   }), "Bắt đầu cuộc đua"));
+}
+
+function mapFinalizedResults(race, savedResults) {
+  return (savedResults || []).map(function (row) {
+    return {
+      participantId: String(row.participantId),
+      horseName: row.horseName,
+      jockeyUsername: row.jockeyName,
+      rank: row.position || null,
+      finishTimeMillis: row.time && row.time !== "—" ? Number(row.time) : 0,
+      status: row.position ? "FINISHED" : "DISQUALIFIED",
+      prizeAmount: prizeAmountForRank(race, row.position),
+      note: row.notes || "",
+      source: row.source || "MANUAL",
+      simulationRunId: row.simulationRunId || null,
+    };
+  });
+}
+
+async function updateHorseStatsOnce(savedResults) {
+  await Promise.allSettled((savedResults || []).filter(function (row) {
+    return row.horseId && row.position > 0;
+  }).map(function (row) {
+    return Horse.findByIdAndUpdate(row.horseId, {
+      $inc: { races: 1, wins: row.position === 1 ? 1 : 0 },
+    }).exec();
+  }));
 }
 
 async function finalizeResults(req, res) {
@@ -202,66 +216,39 @@ async function finalizeResults(req, res) {
     throw apiError("Cuộc đua đã có mô phỏng; hãy xác nhận kết quả mô phỏng", 409);
   }
   if (ctx.race.resultFinalizedAt || (ctx.race.results && ctx.race.results.length)) {
-    throw apiError("Kết quả cuộc đua đã được xác nhận", 409);
+    var financialPending = ctx.race.financialSettlementStatus !== "SETTLED";
+    var bettingPending = await raceLifecycleService.hasPendingBettingSettlement(ctx.race._id);
+    if (!financialPending && !bettingPending) {
+      throw apiError("Kết quả cuộc đua đã được xác nhận", 409);
+    }
+
+    var resumedSettlement = financialPending
+      ? await raceFinancialSettlementService.finalizeRace(ctx, req.user.id)
+      : { tournament: ctx.tournament, race: ctx.race, idempotent: true };
+    ctx.tournament = resumedSettlement.tournament;
+    ctx.race = resumedSettlement.race;
+    if (!resumedSettlement.idempotent) await updateHorseStatsOnce(ctx.race.results);
+    await raceLifecycleService.settleBetting(ctx.race._id);
+    await Promise.allSettled([
+      raceLifecycleService.publishRaceResult(ctx.tournament, ctx.race),
+    ]);
+    return res.json(apiSuccess(
+      mapFinalizedResults(ctx.race, ctx.race.results),
+      "Hoàn tất quyết toán kết quả cuộc đua",
+    ));
   }
   if (tm.toRaceStatusCode(ctx.race.status) !== "ONGOING") {
     throw apiError("Chỉ có thể xác nhận kết quả khi cuộc đua đang diễn ra", 409);
   }
 
   var entries = Array.isArray(req.body.results) ? req.body.results : [];
-  if (!entries.length) {
-    throw apiError("Thiếu kết quả cuộc đua", 400);
-  }
-
   var raceId = String(ctx.race._id);
-  var savedResults = [];
-
-  entries.forEach(function (item, index) {
-    var participantId = String(item.participantId || "").trim();
-    if (!participantId) {
-      throw apiError("Thiếu mã ngựa tham gia", 400);
-    }
-
-    var reg = ctx.tournament.registrations.id(participantId);
-    if (!reg || String(reg.raceId) !== raceId) {
-      throw apiError("Không tìm thấy ngựa tham gia trong cuộc đua", 400);
-    }
-
-    var isDisqualified = String(item.status || "").toUpperCase() === "DISQUALIFIED";
-    var rank = isDisqualified ? 0 : Number(item.rank || index + 1);
-    var finishMs = Number(item.finishTimeMillis || 0);
-
-    reg.participantStatus = isDisqualified ? "DISQUALIFIED" : "FINISHED";
-    if (!isDisqualified) {
-      reg.status = "Hoàn thành";
-    }
-    if (item.note) {
-      reg.notes = item.note;
-    }
-
-    savedResults.push({
-      position: isDisqualified ? 0 : rank,
-      horseId: reg.horseId || null,
-      horseName: reg.horseName || "—",
-      participantId: reg._id,
-      jockeyId: reg.jockeyId || null,
-      jockeyName: reg.jockeyName || "",
-      time: finishMs > 0 ? String(finishMs) : "—",
-      points: 0,
-      notes: item.note || "",
-      status: isDisqualified ? "DISQUALIFIED" : "FINISHED",
-      source: "MANUAL",
-    });
-  });
-
-  savedResults.sort(function (first, second) {
-    if (!first.position) return 1;
-    if (!second.position) return -1;
-    return first.position - second.position;
-  });
+  var prepared = prepareOfficialRaceResults(ctx.tournament, ctx.race, entries);
+  var savedResults = prepared.savedResults;
+  applyOfficialResultParticipantUpdates(prepared);
 
   ctx.race.results = savedResults;
-  ctx.race.status = "Hoàn thành";
+  ctx.race.status = tm.RACE_STATUS_LABELS.RESULT_CONFIRMED;
   ctx.race.resultFinalizedAt = new Date();
   ctx.race.resultFinalizedBy = req.user.id;
 
@@ -269,35 +256,15 @@ async function finalizeResults(req, res) {
   ctx.tournament = settlement.tournament;
   ctx.race = settlement.race;
 
+  if (!settlement.idempotent) await updateHorseStatsOnce(savedResults);
+  await raceLifecycleService.settleBetting(raceId);
   await Promise.allSettled([
-    raceLifecycleService.settleBetting(raceId),
     raceLifecycleService.publishRaceResult(ctx.tournament, ctx.race),
   ]);
 
-  await Promise.allSettled(savedResults.filter(function (row) {
-    return row.horseId && row.position > 0;
-  }).map(function (row) {
-    return Horse.findByIdAndUpdate(row.horseId, {
-      $inc: { races: 1, wins: row.position === 1 ? 1 : 0 },
-    }).exec();
-  }));
-
   res.json(
     apiSuccess(
-      savedResults.map(function (row) {
-        return {
-          participantId: String(row.participantId),
-          horseName: row.horseName,
-          jockeyUsername: row.jockeyName,
-          rank: row.position || null,
-          finishTimeMillis: row.time && row.time !== "—" ? Number(row.time) : 0,
-          status: row.position ? "FINISHED" : "DISQUALIFIED",
-          prizeAmount: prizeAmountForRank(ctx.race, row.position),
-          note: row.notes || "",
-          source: row.source || "MANUAL",
-          simulationRunId: null,
-        };
-      }),
+      mapFinalizedResults(ctx.race, savedResults),
       "Chốt kết quả thành công",
     ),
   );

@@ -18,6 +18,7 @@ test("scheduling a tournament moves only preparatory races to SCHEDULED", functi
     "PUBLISHED",
     "OPEN_REGISTRATION",
     "REGISTRATION_CLOSED",
+    "ONGOING",
     "RESULT_CONFIRMED",
     "CANCELLED",
   ]);
@@ -30,9 +31,21 @@ test("scheduling a tournament moves only preparatory races to SCHEDULED", functi
     "SCHEDULED",
     "SCHEDULED",
     "SCHEDULED",
+    "ONGOING",
     "RESULT_CONFIRMED",
     "CANCELLED",
   ]);
+});
+
+test("pre-race tournament statuses synchronize only preparatory races", function () {
+  ["DRAFT", "PUBLISHED", "OPEN_REGISTRATION", "REGISTRATION_CLOSED"].forEach(function (code) {
+    var item = tournament(code, ["DRAFT", "PUBLISHED", "ONGOING", "RESULT_CONFIRMED", "CANCELLED"]);
+
+    assert.equal(sync.syncTournamentRaceStatuses(item, code), true);
+    assert.deepEqual(item.races.map(function (race) {
+      return tm.toRaceStatusCode(race.status);
+    }), [code, code, "ONGOING", "RESULT_CONFIRMED", "CANCELLED"]);
+  });
 });
 
 test("an ONGOING tournament never starts or rewinds races", function () {
